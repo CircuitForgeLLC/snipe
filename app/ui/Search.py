@@ -1,0 +1,127 @@
+"""Main search + results page."""
+from __future__ import annotations
+import os
+from pathlib import Path
+import streamlit as st
+from circuitforge_core.config import load_env
+from app.db.store import Store
+from app.platforms import SearchFilters
+from app.platforms.ebay.auth import EbayTokenManager
+from app.platforms.ebay.adapter import EbayAdapter
+from app.trust import TrustScorer
+from app.ui.components.filters import build_filter_options, render_filter_sidebar, FilterState
+from app.ui.components.listing_row import render_listing_row
+
+load_env(Path(".env"))
+_DB_PATH = Path(os.environ.get("SNIPE_DB", "data/snipe.db"))
+_DB_PATH.parent.mkdir(exist_ok=True)
+
+
+def _get_adapter() -> EbayAdapter:
+    store = Store(_DB_PATH)
+    tokens = EbayTokenManager(
+        client_id=os.environ.get("EBAY_CLIENT_ID", ""),
+        client_secret=os.environ.get("EBAY_CLIENT_SECRET", ""),
+        env=os.environ.get("EBAY_ENV", "production"),
+    )
+    return EbayAdapter(tokens, store, env=os.environ.get("EBAY_ENV", "production"))
+
+
+def _passes_filter(listing, trust, seller, state: FilterState) -> bool:
+    import json
+    if trust and trust.composite_score < state.min_trust_score:
+        return False
+    if state.min_price and listing.price < state.min_price:
+        return False
+    if state.max_price and listing.price > state.max_price:
+        return False
+    if state.conditions and listing.condition not in state.conditions:
+        return False
+    if seller:
+        if seller.account_age_days < state.min_account_age_days:
+            return False
+        if seller.feedback_count < state.min_feedback_count:
+            return False
+        if seller.feedback_ratio < state.min_feedback_ratio:
+            return False
+    if trust:
+        flags = json.loads(trust.red_flags_json or "[]")
+        if state.hide_new_accounts and "account_under_30_days" in flags:
+            return False
+        if state.hide_suspicious_price and "suspicious_price" in flags:
+            return False
+        if state.hide_duplicate_photos and "duplicate_photo" in flags:
+            return False
+    return True
+
+
+def render() -> None:
+    st.title("🔍 Snipe — eBay Listing Search")
+
+    col_q, col_price, col_btn = st.columns([4, 2, 1])
+    query = col_q.text_input("Search", placeholder="RTX 4090 GPU", label_visibility="collapsed")
+    max_price = col_price.number_input("Max price $", min_value=0.0, value=0.0,
+                                       step=50.0, label_visibility="collapsed")
+    search_clicked = col_btn.button("Search", use_container_width=True)
+
+    if not search_clicked or not query:
+        st.info("Enter a search term and click Search.")
+        return
+
+    with st.spinner("Fetching listings..."):
+        try:
+            adapter = _get_adapter()
+            filters = SearchFilters(max_price=max_price if max_price > 0 else None)
+            listings = adapter.search(query, filters)
+            adapter.get_completed_sales(query)  # warm the comps cache
+        except Exception as e:
+            st.error(f"eBay search failed: {e}")
+            return
+
+    if not listings:
+        st.warning("No listings found.")
+        return
+
+    store = Store(_DB_PATH)
+    for listing in listings:
+        store.save_listing(listing)
+        if listing.seller_platform_id:
+            seller = adapter.get_seller(listing.seller_platform_id)
+            if seller:
+                store.save_seller(seller)
+
+    scorer = TrustScorer(store)
+    trust_scores = scorer.score_batch(listings, query)
+    pairs = list(zip(listings, trust_scores))
+
+    opts = build_filter_options(pairs)
+    filter_state = render_filter_sidebar(pairs, opts)
+
+    sort_col = st.selectbox("Sort by", ["Trust score", "Price ↑", "Price ↓", "Newest"],
+                            label_visibility="collapsed")
+
+    def sort_key(pair):
+        l, t = pair
+        if sort_col == "Trust score": return -(t.composite_score if t else 0)
+        if sort_col == "Price ↑":    return l.price
+        if sort_col == "Price ↓":    return -l.price
+        return l.listing_age_days
+
+    sorted_pairs = sorted(pairs, key=sort_key)
+    visible = [(l, t) for l, t in sorted_pairs
+               if _passes_filter(l, t, store.get_seller("ebay", l.seller_platform_id), filter_state)]
+    hidden_count = len(sorted_pairs) - len(visible)
+
+    st.caption(f"{len(visible)} results · {hidden_count} hidden by filters")
+
+    for listing, trust in visible:
+        seller = store.get_seller("ebay", listing.seller_platform_id)
+        render_listing_row(listing, trust, seller)
+
+    if hidden_count:
+        if st.button(f"Show {hidden_count} hidden results"):
+            visible_ids = {(l.platform, l.platform_listing_id) for l, _ in visible}
+            for listing, trust in sorted_pairs:
+                if (listing.platform, listing.platform_listing_id) not in visible_ids:
+                    seller = store.get_seller("ebay", listing.seller_platform_id)
+                    render_listing_row(listing, trust, seller)
