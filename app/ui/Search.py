@@ -1,30 +1,47 @@
 """Main search + results page."""
 from __future__ import annotations
+import logging
 import os
 from pathlib import Path
 import streamlit as st
 from circuitforge_core.config import load_env
 from app.db.store import Store
-from app.platforms import SearchFilters
-from app.platforms.ebay.auth import EbayTokenManager
-from app.platforms.ebay.adapter import EbayAdapter
+from app.platforms import PlatformAdapter, SearchFilters
 from app.trust import TrustScorer
 from app.ui.components.filters import build_filter_options, render_filter_sidebar, FilterState
 from app.ui.components.listing_row import render_listing_row
+
+log = logging.getLogger(__name__)
 
 load_env(Path(".env"))
 _DB_PATH = Path(os.environ.get("SNIPE_DB", "data/snipe.db"))
 _DB_PATH.parent.mkdir(exist_ok=True)
 
 
-def _get_adapter() -> EbayAdapter:
-    store = Store(_DB_PATH)
-    tokens = EbayTokenManager(
-        client_id=os.environ.get("EBAY_CLIENT_ID", ""),
-        client_secret=os.environ.get("EBAY_CLIENT_SECRET", ""),
-        env=os.environ.get("EBAY_ENV", "production"),
+def _get_adapter(store: Store) -> PlatformAdapter:
+    """Return the best available eBay adapter based on what's configured.
+
+    Auto-detects: if EBAY_CLIENT_ID + EBAY_CLIENT_SECRET are present, use the
+    full API adapter (all 5 trust signals). Otherwise fall back to the scraper
+    (3/5 signals, score_is_partial=True) and warn to logs so ops can see why
+    scores are partial without touching the UI.
+    """
+    client_id = os.environ.get("EBAY_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("EBAY_CLIENT_SECRET", "").strip()
+
+    if client_id and client_secret:
+        from app.platforms.ebay.adapter import EbayAdapter
+        from app.platforms.ebay.auth import EbayTokenManager
+        env = os.environ.get("EBAY_ENV", "production")
+        return EbayAdapter(EbayTokenManager(client_id, client_secret, env), store, env=env)
+
+    log.warning(
+        "EBAY_CLIENT_ID / EBAY_CLIENT_SECRET not set — "
+        "falling back to scraper (partial trust scores: account_age and "
+        "category_history signals unavailable). Set API credentials for full scoring."
     )
-    return EbayAdapter(tokens, store, env=os.environ.get("EBAY_ENV", "production"))
+    from app.platforms.ebay.scraper import ScrapedEbayAdapter
+    return ScrapedEbayAdapter(store)
 
 
 def _passes_filter(listing, trust, seller, state: FilterState) -> bool:
@@ -68,9 +85,11 @@ def render() -> None:
         st.info("Enter a search term and click Search.")
         return
 
+    store = Store(_DB_PATH)
+    adapter = _get_adapter(store)
+
     with st.spinner("Fetching listings..."):
         try:
-            adapter = _get_adapter()
             filters = SearchFilters(max_price=max_price if max_price > 0 else None)
             listings = adapter.search(query, filters)
             adapter.get_completed_sales(query)  # warm the comps cache
@@ -82,7 +101,6 @@ def render() -> None:
         st.warning("No listings found.")
         return
 
-    store = Store(_DB_PATH)
     for listing in listings:
         store.save_listing(listing)
         if listing.seller_platform_id:
