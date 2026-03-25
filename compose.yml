@@ -1,0 +1,10 @@
+services:
+  snipe:
+    build:
+      context: ..
+      dockerfile: snipe/Dockerfile
+    ports:
+      - "8506:8506"
+    env_file: .env
+    volumes:
+      - ./data:/app/snipe/data

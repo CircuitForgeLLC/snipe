@@ -1,0 +1,8 @@
+services:
+  snipe:
+    volumes:
+      - ../circuitforge-core:/app/circuitforge-core
+      - ./app:/app/snipe/app
+      - ./data:/app/snipe/data
+    environment:
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
