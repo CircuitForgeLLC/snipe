@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Emoji favicon: target reticle — inline SVG to avoid a separate file -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snipe</title>
+    <!-- Inline background prevents blank flash before CSS bundle loads -->
+    <!-- Matches --color-surface dark tactical theme from theme.css -->
+    <style>
+      html, body { margin: 0; background: #0d1117; min-height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <!-- Mount target only — App.vue root must NOT use id="app". Gotcha #1. -->
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

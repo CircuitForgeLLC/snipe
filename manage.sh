@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVICE=snipe
-PORT=8506
+PORT=8509  # Vue web UI (nginx)
 COMPOSE_FILE="compose.yml"
 
 usage() {
