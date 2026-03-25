@@ -2,6 +2,7 @@ services:
   snipe:
     volumes:
       - ../circuitforge-core:/app/circuitforge-core
+      - ./streamlit_app.py:/app/snipe/streamlit_app.py
       - ./app:/app/snipe/app
       - ./data:/app/snipe/data
     environment:

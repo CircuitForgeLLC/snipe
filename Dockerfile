@@ -11,5 +11,5 @@ COPY snipe/ ./snipe/
 WORKDIR /app/snipe
 RUN pip install --no-cache-dir -e .
 
-EXPOSE 8506
-CMD ["streamlit", "run", "app/app.py", "--server.port=8506", "--server.address=0.0.0.0"]
+EXPOSE 8509
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8509", "--server.address=0.0.0.0"]
