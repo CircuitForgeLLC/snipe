@@ -7,3 +7,5 @@ dist/
 .pytest_cache/
 data/
 .superpowers/
+web/node_modules/
+web/dist/
