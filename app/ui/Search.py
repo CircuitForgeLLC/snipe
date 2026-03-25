@@ -10,6 +10,10 @@ from app.platforms import PlatformAdapter, SearchFilters
 from app.trust import TrustScorer
 from app.ui.components.filters import build_filter_options, render_filter_sidebar, FilterState
 from app.ui.components.listing_row import render_listing_row
+from app.ui.components.easter_eggs import (
+    inject_steal_css, check_snipe_mode, render_snipe_mode_banner,
+    auction_hours_remaining,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +76,12 @@ def _passes_filter(listing, trust, seller, state: FilterState) -> bool:
     return True
 
 
-def render() -> None:
+def render(audio_enabled: bool = False) -> None:
+    inject_steal_css()
+
+    if check_snipe_mode():
+        render_snipe_mode_banner(audio_enabled)
+
     st.title("🔍 Snipe — eBay Listing Search")
 
     col_q, col_price, col_btn = st.columns([4, 2, 1])
@@ -115,14 +124,21 @@ def render() -> None:
     opts = build_filter_options(pairs)
     filter_state = render_filter_sidebar(pairs, opts)
 
-    sort_col = st.selectbox("Sort by", ["Trust score", "Price ↑", "Price ↓", "Newest"],
-                            label_visibility="collapsed")
+    sort_col = st.selectbox(
+        "Sort by",
+        ["Trust score", "Price ↑", "Price ↓", "Newest", "Ending soon"],
+        label_visibility="collapsed",
+    )
 
     def sort_key(pair):
         l, t = pair
-        if sort_col == "Trust score": return -(t.composite_score if t else 0)
-        if sort_col == "Price ↑":    return l.price
-        if sort_col == "Price ↓":    return -l.price
+        if sort_col == "Trust score":  return -(t.composite_score if t else 0)
+        if sort_col == "Price ↑":      return l.price
+        if sort_col == "Price ↓":      return -l.price
+        if sort_col == "Ending soon":
+            h = auction_hours_remaining(l)
+            # Non-auctions sort to end; auctions sort ascending by time left
+            return (h if h is not None else float("inf"))
         return l.listing_age_days
 
     sorted_pairs = sorted(pairs, key=sort_key)
@@ -132,9 +148,14 @@ def render() -> None:
 
     st.caption(f"{len(visible)} results · {hidden_count} hidden by filters")
 
+    import hashlib
+    query_hash = hashlib.md5(query.encode()).hexdigest()
+    comp = store.get_market_comp("ebay", query_hash)
+    market_price = comp.median_price if comp else None
+
     for listing, trust in visible:
         seller = store.get_seller("ebay", listing.seller_platform_id)
-        render_listing_row(listing, trust, seller)
+        render_listing_row(listing, trust, seller, market_price=market_price)
 
     if hidden_count:
         if st.button(f"Show {hidden_count} hidden results"):
@@ -142,4 +163,4 @@ def render() -> None:
             for listing, trust in sorted_pairs:
                 if (listing.platform, listing.platform_listing_id) not in visible_ids:
                     seller = store.get_seller("ebay", listing.seller_platform_id)
-                    render_listing_row(listing, trust, seller)
+                    render_listing_row(listing, trust, seller, market_price=market_price)

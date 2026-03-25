@@ -41,6 +41,7 @@ _HEADERS = {
 _SELLER_RE = re.compile(r"^(.+?)\s+\(([0-9,]+)\)\s+([\d.]+)%")
 _PRICE_RE = re.compile(r"[\d,]+\.?\d*")
 _ITEM_ID_RE = re.compile(r"/itm/(\d+)")
+_TIME_LEFT_RE = re.compile(r"(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s\s*)?left", re.I)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,26 @@ def _parse_seller(text: str) -> tuple[str, int, float]:
     if not m:
         return (text.split()[0] if text else ""), 0, 0.0
     return m.group(1).strip(), int(m.group(2).replace(",", "")), float(m.group(3)) / 100.0
+
+
+def _parse_time_left(text: str) -> Optional[timedelta]:
+    """Parse eBay time-left text into a timedelta.
+
+    Handles '3d 14h left', '14h 23m left', '23m 45s left'.
+    Returns None if text doesn't match (i.e. fixed-price listing).
+    """
+    if not text:
+        return None
+    m = _TIME_LEFT_RE.search(text)
+    if not m or not any(m.groups()):
+        return None
+    days = int(m.group(1) or 0)
+    hours = int(m.group(2) or 0)
+    minutes = int(m.group(3) or 0)
+    seconds = int(m.group(4) or 0)
+    if days == hours == minutes == seconds == 0:
+        return None
+    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 
 def scrape_listings(html: str) -> list[Listing]:
@@ -104,6 +125,14 @@ def scrape_listings(html: str) -> list[Listing]:
         if img_el:
             photo_url = img_el.get("data-src") or img_el.get("src") or ""
 
+        # Auction detection: presence of s-item__time-left means auction format
+        time_el = item.select_one("span.s-item__time-left")
+        time_remaining = _parse_time_left(time_el.text) if time_el else None
+        buying_format = "auction" if time_remaining is not None else "fixed_price"
+        ends_at = None
+        if time_remaining is not None:
+            ends_at = (datetime.now(timezone.utc) + time_remaining).isoformat()
+
         results.append(Listing(
             platform="ebay",
             platform_listing_id=platform_listing_id,
@@ -115,6 +144,8 @@ def scrape_listings(html: str) -> list[Listing]:
             url=url,
             photo_urls=[photo_url] if photo_url else [],
             listing_age_days=0,  # not reliably in search HTML
+            buying_format=buying_format,
+            ends_at=ends_at,
         ))
 
     return results

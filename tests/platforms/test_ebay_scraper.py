@@ -4,7 +4,10 @@ Uses a minimal HTML fixture that mirrors eBay's search results structure.
 No HTTP requests are made — all tests operate on the pure parsing functions.
 """
 import pytest
-from app.platforms.ebay.scraper import scrape_listings, scrape_sellers, _parse_price, _parse_seller
+from datetime import timedelta
+from app.platforms.ebay.scraper import (
+    scrape_listings, scrape_sellers, _parse_price, _parse_seller, _parse_time_left,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal eBay search results HTML fixture
@@ -149,3 +152,59 @@ class TestScrapeSellers:
         """category_history_json is always '{}' from scraper — signals partial score."""
         sellers = scrape_sellers(_EBAY_HTML)
         assert all(s.category_history_json == "{}" for s in sellers.values())
+
+
+# ---------------------------------------------------------------------------
+# _parse_time_left
+# ---------------------------------------------------------------------------
+
+class TestParseTimeLeft:
+    def test_days_hours(self):
+        td = _parse_time_left("3d 14h left")
+        assert td == timedelta(days=3, hours=14)
+
+    def test_hours_minutes(self):
+        td = _parse_time_left("14h 23m left")
+        assert td == timedelta(hours=14, minutes=23)
+
+    def test_minutes_seconds(self):
+        td = _parse_time_left("23m 45s left")
+        assert td == timedelta(minutes=23, seconds=45)
+
+    def test_days_only(self):
+        td = _parse_time_left("2d left")
+        assert td == timedelta(days=2)
+
+    def test_no_match_returns_none(self):
+        assert _parse_time_left("Buy It Now") is None
+
+    def test_empty_string_returns_none(self):
+        assert _parse_time_left("") is None
+
+    def test_all_zeros_returns_none(self):
+        # Regex can match "0d 0h 0m 0s left" — should treat as no time left = None
+        assert _parse_time_left("0d 0h 0m 0s left") is None
+
+    def test_auction_listing_sets_ends_at(self):
+        """scrape_listings should set ends_at for an auction item."""
+        auction_html = """
+        <html><body><ul class="srp-results">
+          <li class="s-item">
+            <h3 class="s-item__title"><span>Test Item</span></h3>
+            <a class="s-item__link" href="https://www.ebay.com/itm/999"></a>
+            <span class="s-item__price">$100.00</span>
+            <span class="s-item__time-left">2h 30m left</span>
+          </li>
+        </ul></body></html>
+        """
+        listings = scrape_listings(auction_html)
+        assert len(listings) == 1
+        assert listings[0].buying_format == "auction"
+        assert listings[0].ends_at is not None
+
+    def test_fixed_price_listing_no_ends_at(self):
+        """scrape_listings should leave ends_at=None for fixed-price items."""
+        listings = scrape_listings(_EBAY_HTML)
+        fixed = [l for l in listings if l.buying_format == "fixed_price"]
+        assert len(fixed) > 0
+        assert all(l.ends_at is None for l in fixed)

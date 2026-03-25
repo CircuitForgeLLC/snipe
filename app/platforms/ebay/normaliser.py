@@ -25,6 +25,22 @@ def normalise_listing(raw: dict) -> Listing:
         except ValueError:
             pass
 
+    options = raw.get("buyingOptions", [])
+    if "AUCTION" in options:
+        buying_format = "auction"
+    elif "BEST_OFFER" in options:
+        buying_format = "best_offer"
+    else:
+        buying_format = "fixed_price"
+
+    ends_at = None
+    end_raw = raw.get("itemEndDate", "")
+    if end_raw:
+        try:
+            ends_at = datetime.fromisoformat(end_raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            pass
+
     seller = raw.get("seller", {})
     return Listing(
         platform="ebay",
@@ -37,6 +53,8 @@ def normalise_listing(raw: dict) -> Listing:
         url=raw.get("itemWebUrl", ""),
         photo_urls=photos,
         listing_age_days=listing_age_days,
+        buying_format=buying_format,
+        ends_at=ends_at,
     )
 
 

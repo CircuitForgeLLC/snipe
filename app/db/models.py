@@ -29,6 +29,8 @@ class Listing:
     url: str
     photo_urls: list[str] = field(default_factory=list)
     listing_age_days: int = 0
+    buying_format: str = "fixed_price"   # "fixed_price", "auction", "best_offer"
+    ends_at: Optional[str] = None        # ISO8601 auction end time; None for fixed-price
     id: Optional[int] = None
     fetched_at: Optional[str] = None
     trust_score_id: Optional[int] = None

@@ -48,19 +48,21 @@ class Store:
         self._conn.execute(
             "INSERT OR REPLACE INTO listings "
             "(platform, platform_listing_id, title, price, currency, condition, "
-            "seller_platform_id, url, photo_urls, listing_age_days) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "seller_platform_id, url, photo_urls, listing_age_days, buying_format, ends_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (listing.platform, listing.platform_listing_id, listing.title,
              listing.price, listing.currency, listing.condition,
              listing.seller_platform_id, listing.url,
-             json.dumps(listing.photo_urls), listing.listing_age_days),
+             json.dumps(listing.photo_urls), listing.listing_age_days,
+             listing.buying_format, listing.ends_at),
         )
         self._conn.commit()
 
     def get_listing(self, platform: str, platform_listing_id: str) -> Optional[Listing]:
         row = self._conn.execute(
             "SELECT platform, platform_listing_id, title, price, currency, condition, "
-            "seller_platform_id, url, photo_urls, listing_age_days, id, fetched_at "
+            "seller_platform_id, url, photo_urls, listing_age_days, id, fetched_at, "
+            "buying_format, ends_at "
             "FROM listings WHERE platform=? AND platform_listing_id=?",
             (platform, platform_listing_id),
         ).fetchone()
@@ -72,6 +74,8 @@ class Store:
             listing_age_days=row[9],
             id=row[10],
             fetched_at=row[11],
+            buying_format=row[12] or "fixed_price",
+            ends_at=row[13],
         )
 
     # --- MarketComp ---

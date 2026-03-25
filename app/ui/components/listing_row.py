@@ -1,9 +1,14 @@
 """Render a single listing row with trust score, badges, and error states."""
 from __future__ import annotations
 import json
-import streamlit as st
-from app.db.models import Listing, TrustScore, Seller
 from typing import Optional
+
+import streamlit as st
+
+from app.db.models import Listing, TrustScore, Seller
+from app.ui.components.easter_eggs import (
+    is_steal, render_steal_banner, render_auction_notice, auction_hours_remaining,
+)
 
 
 def _score_colour(score: int) -> str:
@@ -29,7 +34,17 @@ def render_listing_row(
     listing: Listing,
     trust: Optional[TrustScore],
     seller: Optional[Seller] = None,
+    market_price: Optional[float] = None,
 ) -> None:
+    # Easter egg: The Steal shimmer
+    if is_steal(listing, trust, market_price):
+        render_steal_banner()
+
+    # Auction de-emphasis (if > 1h remaining, price is not meaningful yet)
+    hours = auction_hours_remaining(listing)
+    if hours is not None:
+        render_auction_notice(hours)
+
     col_img, col_info, col_score = st.columns([1, 5, 2])
 
     with col_img:

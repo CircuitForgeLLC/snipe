@@ -15,5 +15,16 @@ if not wizard.is_configured():
     wizard.run()
     st.stop()
 
+from app.ui.components.easter_eggs import inject_konami_detector
+inject_konami_detector()
+
+with st.sidebar:
+    st.divider()
+    audio_enabled = st.checkbox(
+        "🔊 Enable audio easter egg",
+        value=False,
+        help="Plays a synthesised sound on Konami code activation. Off by default.",
+    )
+
 from app.ui.Search import render
-render()
+render(audio_enabled=audio_enabled)
