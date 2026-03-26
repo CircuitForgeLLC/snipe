@@ -84,13 +84,15 @@ export const useSearchStore = defineStore('search', () => {
     try {
       // TODO: POST /api/search with { query: q, filters }
       // API does not exist yet — stub returns empty results
+      // VITE_API_BASE is '' in dev; '/snipe' under menagerie (baked at build time by Vite)
+      const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
       const params = new URLSearchParams({ q })
       if (filters.maxPrice != null) params.set('max_price', String(filters.maxPrice))
       if (filters.minPrice != null) params.set('min_price', String(filters.minPrice))
       if (filters.pages != null && filters.pages > 1) params.set('pages', String(filters.pages))
       if (filters.mustInclude?.trim()) params.set('must_include', filters.mustInclude.trim())
       if (filters.mustExclude?.trim()) params.set('must_exclude', filters.mustExclude.trim())
-      const res = await fetch(`/api/search?${params}`)
+      const res = await fetch(`${apiBase}/api/search?${params}`)
       if (!res.ok) throw new Error(`Search failed: ${res.status} ${res.statusText}`)
 
       const data = await res.json() as {

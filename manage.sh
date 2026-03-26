@@ -2,22 +2,35 @@
 set -euo pipefail
 
 SERVICE=snipe
-PORT=8509        # Vue web UI (nginx)
-API_PORT=8510    # FastAPI
+PORT=8509        # Vue web UI (nginx) — dev
+API_PORT=8510    # FastAPI — dev
+CLOUD_PORT=8514  # Vue web UI (nginx) — cloud (menagerie.circuitforge.tech/snipe)
 COMPOSE_FILE="compose.yml"
+CLOUD_COMPOSE_FILE="compose.cloud.yml"
+CLOUD_PROJECT="snipe-cloud"
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|open|build|update|test}"
+    echo "Usage: $0 {start|stop|restart|status|logs|open|build|update|test"
+    echo "           |cloud-start|cloud-stop|cloud-restart|cloud-status|cloud-logs|cloud-build}"
     echo ""
-    echo "  start    Build (if needed) and start all services"
-    echo "  stop     Stop and remove containers"
-    echo "  restart  Stop then start"
-    echo "  status   Show running containers"
-    echo "  logs     Follow logs (logs api | logs web | logs — defaults to all)"
-    echo "  open     Open web UI in browser"
-    echo "  build    Rebuild Docker images without cache"
-    echo "  update   Pull latest images and rebuild"
-    echo "  test     Run pytest test suite in the api container"
+    echo "Dev:"
+    echo "  start         Build (if needed) and start all services"
+    echo "  stop          Stop and remove containers"
+    echo "  restart       Stop then start"
+    echo "  status        Show running containers"
+    echo "  logs [svc]    Follow logs (api | web — defaults to all)"
+    echo "  open          Open web UI in browser"
+    echo "  build         Rebuild Docker images without cache"
+    echo "  update        Pull latest images and rebuild"
+    echo "  test          Run pytest test suite in the api container"
+    echo ""
+    echo "Cloud (menagerie.circuitforge.tech/snipe):"
+    echo "  cloud-start   Build cloud images and start snipe-cloud project"
+    echo "  cloud-stop    Stop cloud instance"
+    echo "  cloud-restart Stop then start cloud instance"
+    echo "  cloud-status  Show cloud containers"
+    echo "  cloud-logs    Follow cloud logs [api|web — defaults to all]"
+    echo "  cloud-build   Rebuild cloud images without cache (required after code changes)"
     exit 1
 }
 
@@ -67,6 +80,36 @@ case "$cmd" in
         docker compose -f "$COMPOSE_FILE" exec api \
             conda run -n job-seeker python -m pytest /app/snipe/tests/ -v "${@}"
         ;;
+
+    # ── Cloud commands ────────────────────────────────────────────────────────
+    cloud-start)
+        docker compose -f "$CLOUD_COMPOSE_FILE" -p "$CLOUD_PROJECT" up -d --build
+        echo "$SERVICE cloud started — https://menagerie.circuitforge.tech/snipe"
+        ;;
+    cloud-stop)
+        docker compose -p "$CLOUD_PROJECT" down --remove-orphans
+        ;;
+    cloud-restart)
+        docker compose -p "$CLOUD_PROJECT" down --remove-orphans
+        docker compose -f "$CLOUD_COMPOSE_FILE" -p "$CLOUD_PROJECT" up -d --build
+        echo "$SERVICE cloud restarted — https://menagerie.circuitforge.tech/snipe"
+        ;;
+    cloud-status)
+        docker compose -p "$CLOUD_PROJECT" ps
+        ;;
+    cloud-logs)
+        target="${1:-}"
+        if [[ -n "$target" ]]; then
+            docker compose -p "$CLOUD_PROJECT" logs -f "$target"
+        else
+            docker compose -p "$CLOUD_PROJECT" logs -f
+        fi
+        ;;
+    cloud-build)
+        docker compose -f "$CLOUD_COMPOSE_FILE" -p "$CLOUD_PROJECT" build --no-cache
+        echo "Cloud build complete. Run './manage.sh cloud-restart' to deploy."
+        ;;
+
     *)
         usage
         ;;
