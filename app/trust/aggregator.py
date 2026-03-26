@@ -37,7 +37,7 @@ class Aggregator:
             red_flags.append("account_under_30_days")
         if seller and seller.feedback_count < 10:
             red_flags.append("low_feedback_count")
-        if clean["price_vs_market"] == 0:
+        if signal_scores.get("price_vs_market") == 0:  # only flag when data exists and price is genuinely <50% of market
             red_flags.append("suspicious_price")
         if photo_hash_duplicate:
             red_flags.append("duplicate_photo")

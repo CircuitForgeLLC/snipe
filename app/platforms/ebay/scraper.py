@@ -14,12 +14,11 @@ import hashlib
 import itertools
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth
 
 from app.db.models import Listing, MarketComp, Seller
 from app.db.store import Store
@@ -164,10 +163,15 @@ def scrape_listings(html: str) -> list[Listing]:
         buying_format = "auction" if time_remaining is not None else "fixed_price"
         ends_at = (datetime.now(timezone.utc) + time_remaining).isoformat() if time_remaining else None
 
+        # Strip eBay's screen-reader accessibility text injected into title links.
+        # get_text() is CSS-blind and picks up visually-hidden spans.
+        raw_title = title_el.get_text(separator=" ", strip=True)
+        title = re.sub(r"\s*Opens in a new window or tab\s*", "", raw_title, flags=re.IGNORECASE).strip()
+
         results.append(Listing(
             platform="ebay",
             platform_listing_id=platform_listing_id,
-            title=title_el.get_text(strip=True),
+            title=title,
             price=price,
             currency="USD",
             condition=condition,
@@ -256,6 +260,9 @@ class ScrapedEbayAdapter(PlatformAdapter):
         env["DISPLAY"] = display
 
         try:
+            from playwright.sync_api import sync_playwright  # noqa: PLC0415 — lazy: only needed in Docker
+            from playwright_stealth import Stealth            # noqa: PLC0415
+
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(
                     headless=False,
@@ -280,12 +287,12 @@ class ScrapedEbayAdapter(PlatformAdapter):
         return html
 
     def search(self, query: str, filters: SearchFilters) -> list[Listing]:
-        params: dict = {"_nkw": query, "_sop": "15", "_ipg": "48"}
+        base_params: dict = {"_nkw": query, "_sop": "15", "_ipg": "48"}
 
         if filters.max_price:
-            params["_udhi"] = str(filters.max_price)
+            base_params["_udhi"] = str(filters.max_price)
         if filters.min_price:
-            params["_udlo"] = str(filters.min_price)
+            base_params["_udlo"] = str(filters.min_price)
         if filters.condition:
             cond_map = {
                 "new": "1000", "used": "3000",
@@ -293,38 +300,62 @@ class ScrapedEbayAdapter(PlatformAdapter):
             }
             codes = [cond_map[c] for c in filters.condition if c in cond_map]
             if codes:
-                params["LH_ItemCondition"] = "|".join(codes)
+                base_params["LH_ItemCondition"] = "|".join(codes)
 
-        html = self._get(params)
-        listings = scrape_listings(html)
+        pages = max(1, filters.pages)
+        page_params = [{**base_params, "_pgn": str(p)} for p in range(1, pages + 1)]
 
-        # Cache seller objects extracted from the same page
-        self._store.save_sellers(list(scrape_sellers(html).values()))
+        with ThreadPoolExecutor(max_workers=min(pages, 3)) as ex:
+            htmls = list(ex.map(self._get, page_params))
 
+        seen_ids: set[str] = set()
+        listings: list[Listing] = []
+        sellers: dict[str, "Seller"] = {}
+        for html in htmls:
+            for listing in scrape_listings(html):
+                if listing.platform_listing_id not in seen_ids:
+                    seen_ids.add(listing.platform_listing_id)
+                    listings.append(listing)
+            sellers.update(scrape_sellers(html))
+
+        self._store.save_sellers(list(sellers.values()))
         return listings
 
     def get_seller(self, seller_platform_id: str) -> Optional[Seller]:
         # Sellers are pre-populated during search(); no extra fetch needed
         return self._store.get_seller("ebay", seller_platform_id)
 
-    def get_completed_sales(self, query: str) -> list[Listing]:
+    def get_completed_sales(self, query: str, pages: int = 1) -> list[Listing]:
         query_hash = hashlib.md5(query.encode()).hexdigest()
         if self._store.get_market_comp("ebay", query_hash):
             return []  # cache hit — comp already stored
 
-        params = {
+        base_params = {
             "_nkw": query,
             "LH_Sold": "1",
             "LH_Complete": "1",
-            "_sop": "13",  # price + shipping: lowest first
+            "_sop": "13",  # sort by price+shipping, lowest first
             "_ipg": "48",
         }
+        pages = max(1, pages)
+        page_params = [{**base_params, "_pgn": str(p)} for p in range(1, pages + 1)]
+
         try:
-            html = self._get(params)
-            listings = scrape_listings(html)
-            prices = sorted(l.price for l in listings if l.price > 0)
+            with ThreadPoolExecutor(max_workers=min(pages, 3)) as ex:
+                htmls = list(ex.map(self._get, page_params))
+
+            seen_ids: set[str] = set()
+            all_listings: list[Listing] = []
+            for html in htmls:
+                for listing in scrape_listings(html):
+                    if listing.platform_listing_id not in seen_ids:
+                        seen_ids.add(listing.platform_listing_id)
+                        all_listings.append(listing)
+
+            prices = sorted(l.price for l in all_listings if l.price > 0)
             if prices:
-                median = prices[len(prices) // 2]
+                mid = len(prices) // 2
+                median = (prices[mid - 1] + prices[mid]) / 2 if len(prices) % 2 == 0 else prices[mid]
                 self._store.save_market_comp(MarketComp(
                     platform="ebay",
                     query_hash=query_hash,
@@ -332,6 +363,6 @@ class ScrapedEbayAdapter(PlatformAdapter):
                     sample_count=len(prices),
                     expires_at=(datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
                 ))
-            return listings
+            return all_listings
         except Exception:
             return []

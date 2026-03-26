@@ -27,8 +27,9 @@ _EBAY_HTML = """
   </li>
 
   <!-- Real listing 1: established seller, used, fixed price -->
+  <!-- Includes eBay's hidden accessibility span to test title stripping -->
   <li class="s-card" data-listingid="123456789">
-    <div class="s-card__title">RTX 4090 Founders Edition GPU</div>
+    <div class="s-card__title">RTX 4090 Founders Edition GPU<span class="clipped">Opens in a new window or tab</span></div>
     <a class="s-card__link" href="https://www.ebay.com/itm/123456789?somequery=1"></a>
     <span class="s-card__price">$950.00</span>
     <div class="s-card__subtitle">Used · Free shipping</div>
@@ -178,6 +179,15 @@ class TestScrapeListings:
         listings = scrape_listings(_EBAY_HTML)
         titles = [l.title for l in listings]
         assert "Shop on eBay" not in titles
+
+    def test_strips_ebay_accessibility_text_from_title(self):
+        """eBay injects a hidden 'Opens in a new window or tab' span into title links
+        for screen readers. get_text() is CSS-blind so we must strip it explicitly."""
+        listings = scrape_listings(_EBAY_HTML)
+        for listing in listings:
+            assert "Opens in a new window or tab" not in listing.title
+        # Verify the actual title content is preserved
+        assert listings[0].title == "RTX 4090 Founders Edition GPU"
 
     def test_parses_three_real_listings(self):
         assert len(scrape_listings(_EBAY_HTML)) == 3

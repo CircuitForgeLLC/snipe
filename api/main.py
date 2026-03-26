@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -38,33 +39,44 @@ def health():
 
 
 @app.get("/api/search")
-def search(q: str = "", max_price: float = 0, min_price: float = 0):
+def search(q: str = "", max_price: float = 0, min_price: float = 0, pages: int = 1):
     if not q.strip():
         return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None}
-
-    store = Store(_DB_PATH)
-    adapter = ScrapedEbayAdapter(store)
 
     filters = SearchFilters(
         max_price=max_price if max_price > 0 else None,
         min_price=min_price if min_price > 0 else None,
+        pages=max(1, pages),
     )
 
+    # Each adapter gets its own Store (SQLite connection) — required for thread safety.
+    # search() and get_completed_sales() run concurrently; they write to different tables
+    # so SQLite file-level locking is the only contention point.
+    search_adapter = ScrapedEbayAdapter(Store(_DB_PATH))
+    comps_adapter = ScrapedEbayAdapter(Store(_DB_PATH))
+
     try:
-        listings = adapter.search(q, filters)
-        adapter.get_completed_sales(q)  # warm market comp cache
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            listings_future = ex.submit(search_adapter.search, q, filters)
+            comps_future = ex.submit(comps_adapter.get_completed_sales, q, pages)
+            listings = listings_future.result()
+            comps_future.result()  # wait; side-effect is saving market comp to DB
     except Exception as e:
         log.warning("eBay scrape failed: %s", e)
         raise HTTPException(status_code=502, detail=f"eBay search failed: {e}")
 
+    # Use search_adapter's store for post-processing — it has the sellers already written
+    store = search_adapter._store
     store.save_listings(listings)
 
     scorer = TrustScorer(store)
     trust_scores_list = scorer.score_batch(listings, q)
 
-    # Market comp
+    # Market comp written by comps_adapter — read from a fresh connection to avoid
+    # cross-thread connection reuse
+    comp_store = Store(_DB_PATH)
     query_hash = hashlib.md5(q.encode()).hexdigest()
-    comp = store.get_market_comp("ebay", query_hash)
+    comp = comp_store.get_market_comp("ebay", query_hash)
     market_price = comp.median_price if comp else None
 
     # Serialize — keyed by platform_listing_id for easy Vue lookup

@@ -42,6 +42,21 @@
         </fieldset>
 
         <fieldset class="filter-group">
+          <legend class="filter-label">Pages to fetch</legend>
+          <div class="filter-pages" role="group" aria-label="Number of result pages">
+            <button
+              v-for="p in [1, 2, 3, 5]"
+              :key="p"
+              type="button"
+              class="filter-pages-btn"
+              :class="{ 'filter-pages-btn--active': filters.pages === p }"
+              @click="filters.pages = p"
+            >{{ p }}</button>
+          </div>
+          <p class="filter-pages-hint">{{ (filters.pages ?? 1) * 48 }} listings · {{ (filters.pages ?? 1) * 2 }} Playwright calls</p>
+        </fieldset>
+
+        <fieldset class="filter-group">
           <legend class="filter-label">Price</legend>
           <div class="filter-row">
             <input v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" />
@@ -166,6 +181,7 @@ const filters = reactive<SearchFilters>({
   hideNewAccounts: false,
   hideSuspiciousPrice: false,
   hideDuplicatePhotos: false,
+  pages: 1,
 })
 
 const CONDITIONS = [
@@ -405,6 +421,43 @@ async function onSearch() {
   accent-color: var(--app-primary);
   width: 14px;
   height: 14px;
+}
+
+.filter-pages {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.filter-pages-btn {
+  flex: 1;
+  padding: var(--space-1) 0;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.filter-pages-btn:hover:not(.filter-pages-btn--active) {
+  border-color: var(--app-primary);
+  color: var(--app-primary);
+}
+
+.filter-pages-btn--active {
+  background: var(--app-primary);
+  border-color: var(--app-primary);
+  color: var(--color-text-inverse);
+}
+
+.filter-pages-hint {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  margin: 0;
+  opacity: 0.75;
 }
 
 /* Results area */

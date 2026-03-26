@@ -60,6 +60,7 @@ export interface SearchFilters {
   hideNewAccounts?: boolean
   hideSuspiciousPrice?: boolean
   hideDuplicatePhotos?: boolean
+  pages?: number  // number of eBay result pages to fetch (48 listings/page, default 1)
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -83,7 +84,8 @@ export const useSearchStore = defineStore('search', () => {
       // API does not exist yet — stub returns empty results
       const params = new URLSearchParams({ q })
       if (filters.maxPrice != null) params.set('max_price', String(filters.maxPrice))
-      if (filters.minTrustScore != null) params.set('min_trust', String(filters.minTrustScore))
+      if (filters.minPrice != null) params.set('min_price', String(filters.minPrice))
+      if (filters.pages != null && filters.pages > 1) params.set('pages', String(filters.pages))
       const res = await fetch(`/api/search?${params}`)
       if (!res.ok) throw new Error(`Search failed: ${res.status} ${res.statusText}`)
 

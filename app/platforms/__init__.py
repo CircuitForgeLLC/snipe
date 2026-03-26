@@ -12,6 +12,7 @@ class SearchFilters:
     min_price: Optional[float] = None
     condition: Optional[list[str]] = field(default_factory=list)
     location_radius_km: Optional[int] = None
+    pages: int = 1  # number of result pages to fetch (48 listings/page)
 
 
 class PlatformAdapter(ABC):

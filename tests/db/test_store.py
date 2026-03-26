@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from app.db.store import Store
 from app.db.models import Listing, Seller, TrustScore, MarketComp
@@ -57,7 +58,7 @@ def test_save_and_get_market_comp(store):
         query_hash="abc123",
         median_price=1050.0,
         sample_count=12,
-        expires_at="2026-03-26T00:00:00",
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
     )
     store.save_market_comp(comp)
     result = store.get_market_comp("ebay", "abc123")
