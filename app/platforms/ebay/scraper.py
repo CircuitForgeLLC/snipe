@@ -202,7 +202,7 @@ def scrape_sellers(html: str) -> dict[str, Seller]:
                 platform="ebay",
                 platform_seller_id=username,
                 username=username,
-                account_age_days=0,       # not available from search HTML
+                account_age_days=None,    # not fetched at scraper tier
                 feedback_count=count,
                 feedback_ratio=ratio,
                 category_history_json="{}", # not available from search HTML

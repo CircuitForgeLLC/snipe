@@ -15,7 +15,7 @@ class MetadataScorer:
         listing_price: float,
     ) -> dict[str, Optional[int]]:
         return {
-            "account_age":      self._account_age(seller.account_age_days),
+            "account_age":      self._account_age(seller.account_age_days) if seller.account_age_days is not None else None,
             "feedback_count":   self._feedback_count(seller.feedback_count),
             "feedback_ratio":   self._feedback_ratio(seller.feedback_ratio, seller.feedback_count),
             "price_vs_market":  self._price_vs_market(listing_price, market_median),

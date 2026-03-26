@@ -24,7 +24,7 @@ class Aggregator:
         red_flags: list[str] = []
 
         # Hard filters
-        if seller and seller.account_age_days < HARD_FILTER_AGE_DAYS:
+        if seller and seller.account_age_days is not None and seller.account_age_days < HARD_FILTER_AGE_DAYS:
             red_flags.append("new_account")
         if seller and (
             seller.feedback_ratio < HARD_FILTER_BAD_RATIO_THRESHOLD
@@ -33,7 +33,7 @@ class Aggregator:
             red_flags.append("established_bad_actor")
 
         # Soft flags
-        if seller and seller.account_age_days < 30:
+        if seller and seller.account_age_days is not None and seller.account_age_days < 30:
             red_flags.append("account_under_30_days")
         if seller and seller.feedback_count < 10:
             red_flags.append("low_feedback_count")

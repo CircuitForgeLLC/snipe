@@ -9,7 +9,7 @@ class Seller:
     platform: str
     platform_seller_id: str
     username: str
-    account_age_days: int
+    account_age_days: Optional[int]   # None = not yet fetched (scraper tier)
     feedback_count: int
     feedback_ratio: float           # 0.0–1.0
     category_history_json: str      # JSON blob of past category sales

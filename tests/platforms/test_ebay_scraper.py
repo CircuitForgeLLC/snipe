@@ -267,10 +267,10 @@ class TestScrapeSellers:
         assert len(sellers) == 1
         assert "repeatguy" in sellers
 
-    def test_account_age_always_zero(self):
-        """account_age_days is 0 from scraper — causes score_is_partial=True."""
+    def test_account_age_is_none(self):
+        """account_age_days is None from scraper tier — causes score_is_partial=True."""
         sellers = scrape_sellers(_EBAY_HTML)
-        assert all(s.account_age_days == 0 for s in sellers.values())
+        assert all(s.account_age_days is None for s in sellers.values())
 
     def test_category_history_always_empty(self):
         """category_history_json is '{}' from scraper — causes score_is_partial=True."""
