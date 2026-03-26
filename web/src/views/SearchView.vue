@@ -57,6 +57,35 @@
         </fieldset>
 
         <fieldset class="filter-group">
+          <legend class="filter-label">Keywords</legend>
+          <div class="filter-row">
+            <label class="filter-label-sm" for="f-include">Must include</label>
+            <input
+              id="f-include"
+              v-model="filters.mustInclude"
+              type="text"
+              class="filter-input filter-input--keyword"
+              placeholder="16gb, founders…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <div class="filter-row">
+            <label class="filter-label-sm" for="f-exclude">Must exclude</label>
+            <input
+              id="f-exclude"
+              v-model="filters.mustExclude"
+              type="text"
+              class="filter-input filter-input--keyword filter-input--exclude"
+              placeholder="broken, parts…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <p class="filter-pages-hint">Comma-separated · re-search to apply to eBay</p>
+        </fieldset>
+
+        <fieldset class="filter-group">
           <legend class="filter-label">Price</legend>
           <div class="filter-row">
             <input v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" />
@@ -182,7 +211,17 @@ const filters = reactive<SearchFilters>({
   hideSuspiciousPrice: false,
   hideDuplicatePhotos: false,
   pages: 1,
+  mustInclude: '',
+  mustExclude: '',
 })
+
+// Parse comma-separated keyword strings into trimmed, lowercase, non-empty term arrays
+const parsedMustInclude = computed(() =>
+  (filters.mustInclude ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+)
+const parsedMustExclude = computed(() =>
+  (filters.mustExclude ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+)
 
 const CONDITIONS = [
   { value: 'new',       label: 'New' },
@@ -235,6 +274,11 @@ function sortedListings(list: Listing[]): Listing[] {
 function passesFilter(listing: Listing): boolean {
   const trust = store.trustScores.get(listing.platform_listing_id)
   const seller = store.sellers.get(listing.seller_platform_id)
+
+  // Keyword filtering — substring match on lowercased title
+  const title = listing.title.toLowerCase()
+  if (parsedMustInclude.value.some(term => !title.includes(term))) return false
+  if (parsedMustExclude.value.some(term => title.includes(term))) return false
 
   if (filters.minTrustScore && trust && trust.composite_score < filters.minTrustScore) return false
   if (filters.minPrice != null && listing.price < filters.minPrice) return false
@@ -421,6 +465,20 @@ async function onSearch() {
   accent-color: var(--app-primary);
   width: 14px;
   height: 14px;
+}
+
+.filter-input--keyword {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.filter-input--exclude {
+  border-color: color-mix(in srgb, var(--color-error) 40%, var(--color-border));
+}
+
+.filter-input--exclude:focus {
+  outline: none;
+  border-color: var(--color-error);
 }
 
 .filter-pages {

@@ -12,7 +12,9 @@ class SearchFilters:
     min_price: Optional[float] = None
     condition: Optional[list[str]] = field(default_factory=list)
     location_radius_km: Optional[int] = None
-    pages: int = 1  # number of result pages to fetch (48 listings/page)
+    pages: int = 1          # number of result pages to fetch (48 listings/page)
+    must_include: list[str] = field(default_factory=list)  # client-side title filter
+    must_exclude: list[str] = field(default_factory=list)  # forwarded to eBay -term AND client-side
 
 
 class PlatformAdapter(ABC):

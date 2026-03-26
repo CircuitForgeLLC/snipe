@@ -60,7 +60,9 @@ export interface SearchFilters {
   hideNewAccounts?: boolean
   hideSuspiciousPrice?: boolean
   hideDuplicatePhotos?: boolean
-  pages?: number  // number of eBay result pages to fetch (48 listings/page, default 1)
+  pages?: number        // number of eBay result pages to fetch (48 listings/page, default 1)
+  mustInclude?: string  // comma-separated; client-side title filter
+  mustExclude?: string  // comma-separated; forwarded to eBay -term AND client-side
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -86,6 +88,8 @@ export const useSearchStore = defineStore('search', () => {
       if (filters.maxPrice != null) params.set('max_price', String(filters.maxPrice))
       if (filters.minPrice != null) params.set('min_price', String(filters.minPrice))
       if (filters.pages != null && filters.pages > 1) params.set('pages', String(filters.pages))
+      if (filters.mustInclude?.trim()) params.set('must_include', filters.mustInclude.trim())
+      if (filters.mustExclude?.trim()) params.set('must_exclude', filters.mustExclude.trim())
       const res = await fetch(`/api/search?${params}`)
       if (!res.ok) throw new Error(`Search failed: ${res.status} ${res.statusText}`)
 

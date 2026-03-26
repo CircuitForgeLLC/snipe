@@ -38,8 +38,20 @@ def health():
     return {"status": "ok"}
 
 
+def _parse_terms(raw: str) -> list[str]:
+    """Split a comma-separated keyword string into non-empty, stripped terms."""
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
 @app.get("/api/search")
-def search(q: str = "", max_price: float = 0, min_price: float = 0, pages: int = 1):
+def search(
+    q: str = "",
+    max_price: float = 0,
+    min_price: float = 0,
+    pages: int = 1,
+    must_include: str = "",   # comma-separated; applied client-side only
+    must_exclude: str = "",   # comma-separated; forwarded to eBay AND applied client-side
+):
     if not q.strip():
         return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None}
 
@@ -47,6 +59,8 @@ def search(q: str = "", max_price: float = 0, min_price: float = 0, pages: int =
         max_price=max_price if max_price > 0 else None,
         min_price=min_price if min_price > 0 else None,
         pages=max(1, pages),
+        must_include=_parse_terms(must_include),
+        must_exclude=_parse_terms(must_exclude),
     )
 
     # Each adapter gets its own Store (SQLite connection) — required for thread safety.

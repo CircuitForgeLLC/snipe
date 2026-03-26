@@ -302,6 +302,12 @@ class ScrapedEbayAdapter(PlatformAdapter):
             if codes:
                 base_params["LH_ItemCondition"] = "|".join(codes)
 
+        # Append negative keywords to the eBay query — eBay supports "-term" in _nkw natively.
+        # This reduces junk results at the source and improves market comp quality.
+        if filters.must_exclude:
+            excludes = " ".join(f"-{t.strip()}" for t in filters.must_exclude if t.strip())
+            base_params["_nkw"] = f"{base_params['_nkw']} {excludes}"
+
         pages = max(1, filters.pages)
         page_params = [{**base_params, "_pgn": str(p)} for p in range(1, pages + 1)]
 
