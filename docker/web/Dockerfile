@@ -4,8 +4,6 @@ WORKDIR /app
 COPY web/package*.json ./
 RUN npm ci --prefer-offline
 COPY web/ ./
-ARG VITE_BASE_URL=/snipe/
-ENV VITE_BASE_URL=${VITE_BASE_URL}
 RUN npm run build
 
 # Stage 2: serve

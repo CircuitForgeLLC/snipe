@@ -3,7 +3,7 @@
     class="listing-card"
     :class="{
       'steal-card': isSteal,
-      'listing-card--auction': isAuction,
+      'listing-card--auction': isAuction && hoursRemaining !== null && hoursRemaining > 1,
     }"
   >
     <!-- Thumbnail -->

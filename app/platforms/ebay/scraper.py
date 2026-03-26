@@ -11,19 +11,30 @@ This is the MIT discovery layer. EbayAdapter (paid/CF proxy) unlocks full trust 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 from app.db.models import Listing, MarketComp, Seller
 from app.db.store import Store
 from app.platforms import PlatformAdapter, SearchFilters
 
 EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
+_HTML_CACHE_TTL = 300  # seconds — 5 minutes
+
+# Module-level cache persists across per-request adapter instantiations.
+# Keyed by URL; value is (html, expiry_timestamp).
+_html_cache: dict[str, tuple[str, float]] = {}
+
+# Cycle through display numbers :200–:299 so concurrent/sequential Playwright
+# calls don't collide on the Xvfb lock file from the previous run.
+_display_counter = itertools.cycle(range(200, 300))
 
 _HEADERS = {
     "User-Agent": (
@@ -39,6 +50,7 @@ _HEADERS = {
 }
 
 _SELLER_RE = re.compile(r"^(.+?)\s+\(([0-9,]+)\)\s+([\d.]+)%")
+_FEEDBACK_RE = re.compile(r"([\d.]+)%\s+positive\s+\(([0-9,]+)\)", re.I)
 _PRICE_RE = re.compile(r"[\d,]+\.?\d*")
 _ITEM_ID_RE = re.compile(r"/itm/(\d+)")
 _TIME_LEFT_RE = re.compile(r"(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s\s*)?left", re.I)
@@ -92,58 +104,77 @@ def _parse_time_left(text: str) -> Optional[timedelta]:
     return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 
+def _extract_seller_from_card(card) -> tuple[str, int, float]:
+    """Extract (username, feedback_count, feedback_ratio) from an s-card element.
+
+    New eBay layout has seller username and feedback as separate su-styled-text spans.
+    We find the feedback span by regex, then take the immediately preceding text as username.
+    """
+    texts = [s.get_text(strip=True) for s in card.select("span.su-styled-text") if s.get_text(strip=True)]
+    username, count, ratio = "", 0, 0.0
+    for i, t in enumerate(texts):
+        m = _FEEDBACK_RE.search(t)
+        if m:
+            ratio = float(m.group(1)) / 100.0
+            count = int(m.group(2).replace(",", ""))
+            # Username is the span just before the feedback span
+            if i > 0:
+                username = texts[i - 1].strip()
+            break
+    return username, count, ratio
+
+
 def scrape_listings(html: str) -> list[Listing]:
     """Parse eBay search results HTML into Listing objects."""
     soup = BeautifulSoup(html, "lxml")
     results = []
 
-    for item in soup.select("li.s-item"):
-        # eBay injects a ghost "Shop on eBay" promo as the first item — skip it
-        title_el = item.select_one("h3.s-item__title span, div.s-item__title span")
-        if not title_el or "Shop on eBay" in title_el.text:
+    for item in soup.select("li.s-card"):
+        # Skip promos: no data-listingid or title is "Shop on eBay"
+        platform_listing_id = item.get("data-listingid", "")
+        if not platform_listing_id:
             continue
 
-        link_el = item.select_one("a.s-item__link")
+        title_el = item.select_one("div.s-card__title")
+        if not title_el or "Shop on eBay" in title_el.get_text():
+            continue
+
+        link_el = item.select_one('a.s-card__link[href*="/itm/"]')
         url = link_el["href"].split("?")[0] if link_el else ""
-        id_match = _ITEM_ID_RE.search(url)
-        platform_listing_id = (
-            id_match.group(1) if id_match else hashlib.md5(url.encode()).hexdigest()[:12]
-        )
 
-        price_el = item.select_one("span.s-item__price")
-        price = _parse_price(price_el.text) if price_el else 0.0
+        price_el = item.select_one("span.s-card__price")
+        price = _parse_price(price_el.get_text()) if price_el else 0.0
 
-        condition_el = item.select_one("span.SECONDARY_INFO")
-        condition = condition_el.text.strip().lower() if condition_el else ""
+        condition_el = item.select_one("div.s-card__subtitle")
+        condition = condition_el.get_text(strip=True).split("·")[0].strip().lower() if condition_el else ""
 
-        seller_el = item.select_one("span.s-item__seller-info-text")
-        seller_username = _parse_seller(seller_el.text)[0] if seller_el else ""
+        seller_username, _, _ = _extract_seller_from_card(item)
 
-        # Images are lazy-loaded — check data-src before src
-        img_el = item.select_one("div.s-item__image-wrapper img, .s-item__image img")
-        photo_url = ""
-        if img_el:
-            photo_url = img_el.get("data-src") or img_el.get("src") or ""
+        img_el = item.select_one("img.s-card__image")
+        photo_url = img_el.get("src") or img_el.get("data-src") or "" if img_el else ""
 
-        # Auction detection: presence of s-item__time-left means auction format
-        time_el = item.select_one("span.s-item__time-left")
-        time_remaining = _parse_time_left(time_el.text) if time_el else None
+        # Auction detection via time-left text patterns in card spans
+        time_remaining = None
+        for span in item.select("span.su-styled-text"):
+            t = span.get_text(strip=True)
+            td = _parse_time_left(t)
+            if td:
+                time_remaining = td
+                break
         buying_format = "auction" if time_remaining is not None else "fixed_price"
-        ends_at = None
-        if time_remaining is not None:
-            ends_at = (datetime.now(timezone.utc) + time_remaining).isoformat()
+        ends_at = (datetime.now(timezone.utc) + time_remaining).isoformat() if time_remaining else None
 
         results.append(Listing(
             platform="ebay",
             platform_listing_id=platform_listing_id,
-            title=title_el.text.strip(),
+            title=title_el.get_text(strip=True),
             price=price,
             currency="USD",
             condition=condition,
             seller_platform_id=seller_username,
             url=url,
             photo_urls=[photo_url] if photo_url else [],
-            listing_age_days=0,  # not reliably in search HTML
+            listing_age_days=0,
             buying_format=buying_format,
             ends_at=ends_at,
         ))
@@ -162,11 +193,10 @@ def scrape_sellers(html: str) -> dict[str, Seller]:
     soup = BeautifulSoup(html, "lxml")
     sellers: dict[str, Seller] = {}
 
-    for item in soup.select("li.s-item"):
-        seller_el = item.select_one("span.s-item__seller-info-text")
-        if not seller_el:
+    for item in soup.select("li.s-card"):
+        if not item.get("data-listingid"):
             continue
-        username, count, ratio = _parse_seller(seller_el.text)
+        username, count, ratio = _extract_seller_from_card(item)
         if username and username not in sellers:
             sellers[username] = Seller(
                 platform="ebay",
@@ -194,17 +224,60 @@ class ScrapedEbayAdapter(PlatformAdapter):
     category_history) cause TrustScorer to set score_is_partial=True.
     """
 
-    def __init__(self, store: Store, delay: float = 0.5):
+    def __init__(self, store: Store, delay: float = 1.0):
         self._store = store
         self._delay = delay
-        self._session = requests.Session()
-        self._session.headers.update(_HEADERS)
 
     def _get(self, params: dict) -> str:
+        """Fetch eBay search HTML via a stealthed Playwright Chromium instance.
+
+        Uses Xvfb virtual display (headless=False) to avoid Kasada's headless
+        detection — same pattern as other CF scrapers that face JS challenges.
+
+        Results are cached for _HTML_CACHE_TTL seconds so repeated searches
+        for the same query return immediately without re-scraping.
+        """
+        url = EBAY_SEARCH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+
+        cached = _html_cache.get(url)
+        if cached and time.time() < cached[1]:
+            return cached[0]
+
         time.sleep(self._delay)
-        resp = self._session.get(EBAY_SEARCH_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        return resp.text
+
+        import subprocess, os
+        display_num = next(_display_counter)
+        display = f":{display_num}"
+        xvfb = subprocess.Popen(
+            ["Xvfb", display, "-screen", "0", "1280x800x24"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        env = os.environ.copy()
+        env["DISPLAY"] = display
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(
+                    headless=False,
+                    env=env,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                ctx = browser.new_context(
+                    user_agent=_HEADERS["User-Agent"],
+                    viewport={"width": 1280, "height": 800},
+                )
+                page = ctx.new_page()
+                Stealth().apply_stealth_sync(page)
+                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                page.wait_for_timeout(2000)  # let any JS challenges resolve
+                html = page.content()
+                browser.close()
+        finally:
+            xvfb.terminate()
+            xvfb.wait()
+
+        _html_cache[url] = (html, time.time() + _HTML_CACHE_TTL)
+        return html
 
     def search(self, query: str, filters: SearchFilters) -> list[Listing]:
         params: dict = {"_nkw": query, "_sop": "15", "_ipg": "48"}
@@ -226,8 +299,7 @@ class ScrapedEbayAdapter(PlatformAdapter):
         listings = scrape_listings(html)
 
         # Cache seller objects extracted from the same page
-        for seller in scrape_sellers(html).values():
-            self._store.save_seller(seller)
+        self._store.save_sellers(list(scrape_sellers(html).values()))
 
         return listings
 

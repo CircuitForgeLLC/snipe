@@ -4,7 +4,7 @@ import UnoCSS from 'unocss/vite'
 
 export default defineConfig({
   plugins: [vue(), UnoCSS()],
-  base: process.env.VITE_BASE_URL ?? '/snipe/',
+  base: process.env.VITE_BASE_URL ?? '/',
   server: {
     host: '0.0.0.0',
     port: 5174,

@@ -183,8 +183,17 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ── Auction de-emphasis ─────────────────────────
    Auctions with >1h remaining have fluid prices — de-emphasise
-   the current price to avoid anchoring on a misleading figure.
+   the card and current price to avoid anchoring on a misleading figure.
 */
+.listing-card--auction {
+  opacity: 0.72;
+  border-color: var(--color-border-light);
+}
+
+.listing-card--auction:hover {
+  opacity: 1;
+}
+
 .auction-price--live {
   opacity: 0.55;
   font-style: italic;

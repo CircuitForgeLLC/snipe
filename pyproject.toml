@@ -16,11 +16,15 @@ dependencies = [
     "python-dotenv>=1.0",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "playwright>=1.44",
+    "playwright-stealth>=1.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

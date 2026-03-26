@@ -20,14 +20,19 @@ class Store:
     # --- Seller ---
 
     def save_seller(self, seller: Seller) -> None:
-        self._conn.execute(
+        self.save_sellers([seller])
+
+    def save_sellers(self, sellers: list[Seller]) -> None:
+        self._conn.executemany(
             "INSERT OR REPLACE INTO sellers "
             "(platform, platform_seller_id, username, account_age_days, "
             "feedback_count, feedback_ratio, category_history_json) "
             "VALUES (?,?,?,?,?,?,?)",
-            (seller.platform, seller.platform_seller_id, seller.username,
-             seller.account_age_days, seller.feedback_count, seller.feedback_ratio,
-             seller.category_history_json),
+            [
+                (s.platform, s.platform_seller_id, s.username, s.account_age_days,
+                 s.feedback_count, s.feedback_ratio, s.category_history_json)
+                for s in sellers
+            ],
         )
         self._conn.commit()
 
@@ -45,16 +50,20 @@ class Store:
     # --- Listing ---
 
     def save_listing(self, listing: Listing) -> None:
-        self._conn.execute(
+        self.save_listings([listing])
+
+    def save_listings(self, listings: list[Listing]) -> None:
+        self._conn.executemany(
             "INSERT OR REPLACE INTO listings "
             "(platform, platform_listing_id, title, price, currency, condition, "
             "seller_platform_id, url, photo_urls, listing_age_days, buying_format, ends_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (listing.platform, listing.platform_listing_id, listing.title,
-             listing.price, listing.currency, listing.condition,
-             listing.seller_platform_id, listing.url,
-             json.dumps(listing.photo_urls), listing.listing_age_days,
-             listing.buying_format, listing.ends_at),
+            [
+                (l.platform, l.platform_listing_id, l.title, l.price, l.currency,
+                 l.condition, l.seller_platform_id, l.url,
+                 json.dumps(l.photo_urls), l.listing_age_days, l.buying_format, l.ends_at)
+                for l in listings
+            ],
         )
         self._conn.commit()
 

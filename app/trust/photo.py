@@ -11,6 +11,10 @@ try:
 except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
+# Module-level phash cache: url → hash string (or None on failure).
+# Avoids re-downloading the same eBay CDN image on repeated searches.
+_phash_cache: dict[str, Optional[str]] = {}
+
 
 class PhotoScorer:
     """
@@ -52,13 +56,17 @@ class PhotoScorer:
     def _fetch_hash(self, url: str) -> Optional[str]:
         if not url:
             return None
+        if url in _phash_cache:
+            return _phash_cache[url]
         try:
             resp = requests.get(url, timeout=5, stream=True)
             resp.raise_for_status()
             img = Image.open(io.BytesIO(resp.content))
-            return str(imagehash.phash(img))
+            result: Optional[str] = str(imagehash.phash(img))
         except Exception:
-            return None
+            result = None
+        _phash_cache[url] = result
+        return result
 
     def _url_dedup(self, photo_urls_per_listing: list[list[str]]) -> list[bool]:
         seen: set[str] = set()
