@@ -6,6 +6,11 @@ from app.db.models import Seller
 
 ELECTRONICS_CATEGORIES = {"ELECTRONICS", "COMPUTERS_TABLETS", "VIDEO_GAMES", "CELL_PHONES"}
 
+# Coefficient of variation (stddev/mean) above which the price distribution is
+# considered too heterogeneous to trust the market median for scam detection.
+# e.g. "Lenovo RTX intel" mixes $200 old ThinkPads with $2000 Legions → CV ~1.0+
+_HETEROGENEOUS_CV_THRESHOLD = 0.6
+
 
 class MetadataScorer:
     def score(
@@ -13,12 +18,13 @@ class MetadataScorer:
         seller: Seller,
         market_median: Optional[float],
         listing_price: float,
+        price_cv: Optional[float] = None,
     ) -> dict[str, Optional[int]]:
         return {
             "account_age":      self._account_age(seller.account_age_days) if seller.account_age_days is not None else None,
             "feedback_count":   self._feedback_count(seller.feedback_count),
             "feedback_ratio":   self._feedback_ratio(seller.feedback_ratio, seller.feedback_count),
-            "price_vs_market":  self._price_vs_market(listing_price, market_median),
+            "price_vs_market":  self._price_vs_market(listing_price, market_median, price_cv),
             "category_history": self._category_history(seller.category_history_json),
         }
 
@@ -43,9 +49,11 @@ class MetadataScorer:
         if ratio < 0.98: return 15
         return 20
 
-    def _price_vs_market(self, price: float, median: Optional[float]) -> Optional[int]:
+    def _price_vs_market(self, price: float, median: Optional[float], price_cv: Optional[float] = None) -> Optional[int]:
         if median is None: return None  # data unavailable → aggregator sets score_is_partial
         if median <= 0:    return None
+        if price_cv is not None and price_cv > _HETEROGENEOUS_CV_THRESHOLD:
+            return None  # mixed model/generation search — median is unreliable
         ratio = price / median
         if ratio < 0.50:  return 0   # >50% below = scam
         if ratio < 0.70:  return 5   # >30% below = suspicious
@@ -53,11 +61,13 @@ class MetadataScorer:
         if ratio <= 1.20: return 20
         return 15  # above market = still ok, just expensive
 
-    def _category_history(self, category_history_json: str) -> int:
+    def _category_history(self, category_history_json: str) -> Optional[int]:
         try:
             history = json.loads(category_history_json)
         except (ValueError, TypeError):
-            return 0
+            return None  # unparseable → data unavailable
+        if not history:
+            return None  # empty dict → no category data from this source
         electronics_sales = sum(
             v for k, v in history.items() if k in ELECTRONICS_CATEGORIES
         )

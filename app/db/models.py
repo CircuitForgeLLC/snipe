@@ -34,6 +34,12 @@ class Listing:
     id: Optional[int] = None
     fetched_at: Optional[str] = None
     trust_score_id: Optional[int] = None
+    category_name: Optional[str] = None          # leaf category from eBay API (e.g. "Graphics/Video Cards")
+    # Staging DB fields — populated from DB after upsert
+    first_seen_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    times_seen: int = 1
+    price_at_first_seen: Optional[float] = None
 
 
 @dataclass

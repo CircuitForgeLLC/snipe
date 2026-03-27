@@ -3,8 +3,8 @@
 Data available from search results HTML (single page load):
   ✅ title, price, condition, photos, URL
   ✅ seller username, feedback count, feedback ratio
-  ❌ account registration date  →  account_age_score = None  (score_is_partial)
-  ❌ category history           →  category_history_score = None (score_is_partial)
+  ❌ account registration date  →  enriched async via BTF /itm/ scrape
+  ❌ category history           →  enriched async via _ssn seller search page
 
 This is the MIT discovery layer. EbayAdapter (paid/CF proxy) unlocks full trust scores.
 """
@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 from bs4 import BeautifulSoup
 
@@ -25,7 +29,12 @@ from app.db.store import Store
 from app.platforms import PlatformAdapter, SearchFilters
 
 EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
+EBAY_ITEM_URL   = "https://www.ebay.com/itm/"
 _HTML_CACHE_TTL = 300  # seconds — 5 minutes
+_JOINED_RE = re.compile(r"Joined\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{4})", re.I)
+_MONTH_MAP = {m: i+1 for i, m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+)}
 
 # Module-level cache persists across per-request adapter instantiations.
 # Keyed by URL; value is (html, expiry_timestamp).
@@ -53,6 +62,25 @@ _FEEDBACK_RE = re.compile(r"([\d.]+)%\s+positive\s+\(([0-9,]+)\)", re.I)
 _PRICE_RE = re.compile(r"[\d,]+\.?\d*")
 _ITEM_ID_RE = re.compile(r"/itm/(\d+)")
 _TIME_LEFT_RE = re.compile(r"(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s\s*)?left", re.I)
+_PARENS_COUNT_RE = re.compile(r"\((\d{1,6})\)")
+
+# Maps title-keyword fragments → internal MetadataScorer category keys.
+# Checked in order — first match wins. Broader terms intentionally listed last.
+_CATEGORY_KEYWORDS: list[tuple[frozenset[str], str]] = [
+    (frozenset(["cell phone", "smartphone", "mobile phone"]), "CELL_PHONES"),
+    (frozenset(["video game", "gaming", "console", "playstation", "xbox", "nintendo"]), "VIDEO_GAMES"),
+    (frozenset(["computer", "tablet", "laptop", "notebook", "chromebook"]), "COMPUTERS_TABLETS"),
+    (frozenset(["electronic"]), "ELECTRONICS"),
+]
+
+
+def _classify_category_label(text: str) -> Optional[str]:
+    """Map an eBay category label to an internal MetadataScorer key, or None."""
+    lower = text.lower()
+    for keywords, key in _CATEGORY_KEYWORDS:
+        if any(kw in lower for kw in keywords):
+            return key
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +243,33 @@ def scrape_sellers(html: str) -> dict[str, Seller]:
     return sellers
 
 
+def scrape_seller_categories(html: str) -> dict[str, int]:
+    """Parse category distribution from a seller's _ssn search page.
+
+    eBay renders category refinements in the left sidebar.  We scan all
+    anchor-text blocks for recognisable category labels and accumulate
+    listing counts from the adjacent parenthetical "(N)" strings.
+
+    Returns a dict like {"ELECTRONICS": 45, "CELL_PHONES": 23}.
+    Empty dict = no recognisable categories found (score stays None).
+    """
+    soup = BeautifulSoup(html, "lxml")
+    counts: dict[str, int] = {}
+
+    # eBay sidebar refinement links contain the category label and a count.
+    # Multiple layout variants exist — scan broadly and classify by keyword.
+    for el in soup.select("a[href*='_sacat='], li.x-refine__main__list--value a"):
+        text = el.get_text(separator=" ", strip=True)
+        key = _classify_category_label(text)
+        if not key:
+            continue
+        m = _PARENS_COUNT_RE.search(text)
+        count = int(m.group(1)) if m else 1
+        counts[key] = counts.get(key, 0) + count
+
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -232,17 +287,12 @@ class ScrapedEbayAdapter(PlatformAdapter):
         self._store = store
         self._delay = delay
 
-    def _get(self, params: dict) -> str:
-        """Fetch eBay search HTML via a stealthed Playwright Chromium instance.
+    def _fetch_url(self, url: str) -> str:
+        """Core Playwright fetch — stealthed headed Chromium via Xvfb.
 
-        Uses Xvfb virtual display (headless=False) to avoid Kasada's headless
-        detection — same pattern as other CF scrapers that face JS challenges.
-
-        Results are cached for _HTML_CACHE_TTL seconds so repeated searches
-        for the same query return immediately without re-scraping.
+        Shared by both search (_get) and BTF item-page enrichment (_fetch_item_html).
+        Results cached for _HTML_CACHE_TTL seconds.
         """
-        url = EBAY_SEARCH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
-
         cached = _html_cache.get(url)
         if cached and time.time() < cached[1]:
             return cached[0]
@@ -286,8 +336,100 @@ class ScrapedEbayAdapter(PlatformAdapter):
         _html_cache[url] = (html, time.time() + _HTML_CACHE_TTL)
         return html
 
+    def _get(self, params: dict) -> str:
+        """Fetch eBay search results HTML. params → query string appended to EBAY_SEARCH_URL."""
+        url = EBAY_SEARCH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        return self._fetch_url(url)
+
+    def _fetch_item_html(self, item_id: str) -> str:
+        """Fetch a single eBay listing page. /itm/ pages pass Kasada; /usr/ pages do not."""
+        return self._fetch_url(f"{EBAY_ITEM_URL}{item_id}")
+
+    @staticmethod
+    def _parse_joined_date(html: str) -> Optional[int]:
+        """Parse 'Joined {Mon} {Year}' from a listing page BTF seller card.
+
+        Returns account_age_days (int) or None if the date is not found.
+        eBay renders this as a span.ux-textspans inside the seller section.
+        """
+        m = _JOINED_RE.search(html)
+        if not m:
+            return None
+        month_str, year_str = m.group(1)[:3].capitalize(), m.group(2)
+        month = _MONTH_MAP.get(month_str)
+        if not month:
+            return None
+        try:
+            reg_date = datetime(int(year_str), month, 1, tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - reg_date).days
+        except ValueError:
+            return None
+
+    def enrich_sellers_btf(
+        self,
+        seller_to_listing: dict[str, str],
+        max_workers: int = 2,
+    ) -> None:
+        """Background BTF enrichment — scrape /itm/ pages to fill in account_age_days.
+
+        seller_to_listing: {seller_platform_id -> platform_listing_id}
+          Only pass sellers whose account_age_days is None (unknown from API batch).
+          Caller limits the dict to new/stale sellers to avoid redundant scrapes.
+
+        Runs Playwright fetches in a thread pool (max_workers=2 by default to
+        avoid hammering Kasada).  Updates seller records in the DB in-place.
+        Does not raise — failures per-seller are silently skipped so the main
+        search response is never blocked.
+        """
+        def _enrich_one(item: tuple[str, str]) -> None:
+            seller_id, listing_id = item
+            try:
+                html = self._fetch_item_html(listing_id)
+                age_days = self._parse_joined_date(html)
+                if age_days is not None:
+                    seller = self._store.get_seller("ebay", seller_id)
+                    if seller:
+                        from dataclasses import replace
+                        updated = replace(seller, account_age_days=age_days)
+                        self._store.save_seller(updated)
+            except Exception:
+                pass  # non-fatal: partial score is better than a crashed enrichment
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(_enrich_one, seller_to_listing.items()))
+
+    def enrich_sellers_categories(
+        self,
+        seller_platform_ids: list[str],
+        max_workers: int = 2,
+    ) -> None:
+        """Scrape _ssn seller pages to populate category_history_json.
+
+        Uses the same headed Playwright stack as search() — the _ssn=USERNAME
+        filter is just a query param on the standard search template, so it
+        passes Kasada identically.  Silently skips on failure so the main
+        search response is never affected.
+        """
+        def _enrich_one(seller_id: str) -> None:
+            try:
+                html = self._get({"_ssn": seller_id, "_sop": "12", "_ipg": "48"})
+                categories = scrape_seller_categories(html)
+                if categories:
+                    seller = self._store.get_seller("ebay", seller_id)
+                    if seller:
+                        from dataclasses import replace
+                        updated = replace(seller, category_history_json=json.dumps(categories))
+                        self._store.save_seller(updated)
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(_enrich_one, seller_platform_ids))
+
     def search(self, query: str, filters: SearchFilters) -> list[Listing]:
         base_params: dict = {"_nkw": query, "_sop": "15", "_ipg": "48"}
+        if filters.category_id:
+            base_params["_sacat"] = filters.category_id
 
         if filters.max_price:
             base_params["_udhi"] = str(filters.max_price)
@@ -303,10 +445,15 @@ class ScrapedEbayAdapter(PlatformAdapter):
                 base_params["LH_ItemCondition"] = "|".join(codes)
 
         # Append negative keywords to the eBay query — eBay supports "-term" in _nkw natively.
-        # This reduces junk results at the source and improves market comp quality.
+        # Multi-word phrases must be quoted: -"parts only" not -parts only (which splits the words).
         if filters.must_exclude:
-            excludes = " ".join(f"-{t.strip()}" for t in filters.must_exclude if t.strip())
-            base_params["_nkw"] = f"{base_params['_nkw']} {excludes}"
+            parts = []
+            for t in filters.must_exclude:
+                t = t.strip()
+                if not t:
+                    continue
+                parts.append(f'-"{t}"' if " " in t else f"-{t}")
+            base_params["_nkw"] = f"{base_params['_nkw']} {' '.join(parts)}"
 
         pages = max(1, filters.pages)
         page_params = [{**base_params, "_pgn": str(p)} for p in range(1, pages + 1)]
@@ -346,6 +493,7 @@ class ScrapedEbayAdapter(PlatformAdapter):
         pages = max(1, pages)
         page_params = [{**base_params, "_pgn": str(p)} for p in range(1, pages + 1)]
 
+        log.info("comps scrape: fetching %d page(s) of sold listings for %r", pages, query)
         try:
             with ThreadPoolExecutor(max_workers=min(pages, 3)) as ex:
                 htmls = list(ex.map(self._get, page_params))
@@ -369,6 +517,10 @@ class ScrapedEbayAdapter(PlatformAdapter):
                     sample_count=len(prices),
                     expires_at=(datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
                 ))
+                log.info("comps scrape: saved market comp median=$%.2f from %d prices", median, len(prices))
+            else:
+                log.warning("comps scrape: %d listings parsed but 0 valid prices — no comp saved", len(all_listings))
             return all_listings
         except Exception:
+            log.warning("comps scrape: failed for %r", query, exc_info=True)
             return []

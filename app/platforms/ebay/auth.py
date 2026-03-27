@@ -21,6 +21,10 @@ class EbayTokenManager:
         self._token: Optional[str] = None
         self._expires_at: float = 0.0
 
+    @property
+    def client_id(self) -> str:
+        return self._client_id
+
     def get_token(self) -> str:
         """Return a valid access token, fetching or refreshing as needed."""
         if self._token and time.time() < self._expires_at - 60:

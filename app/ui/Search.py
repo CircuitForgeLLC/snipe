@@ -48,8 +48,41 @@ def _get_adapter(store: Store) -> PlatformAdapter:
     return ScrapedEbayAdapter(store)
 
 
+def _keyword_passes(title_lower: str, state: FilterState) -> bool:
+    """Apply must_include / must_exclude keyword filtering against a lowercased title."""
+    include_raw = state.must_include.strip()
+    if include_raw:
+        mode = state.must_include_mode
+        if mode == "groups":
+            groups = [
+                [alt.strip().lower() for alt in g.split("|") if alt.strip()]
+                for g in include_raw.split(",")
+                if any(alt.strip() for alt in g.split("|"))
+            ]
+            if not all(any(alt in title_lower for alt in group) for group in groups):
+                return False
+        elif mode == "any":
+            terms = [t.strip().lower() for t in include_raw.split(",") if t.strip()]
+            if not any(t in title_lower for t in terms):
+                return False
+        else:  # "all"
+            terms = [t.strip().lower() for t in include_raw.split(",") if t.strip()]
+            if not all(t in title_lower for t in terms):
+                return False
+
+    exclude_raw = state.must_exclude.strip()
+    if exclude_raw:
+        terms = [t.strip().lower() for t in exclude_raw.split(",") if t.strip()]
+        if any(t in title_lower for t in terms):
+            return False
+
+    return True
+
+
 def _passes_filter(listing, trust, seller, state: FilterState) -> bool:
     import json
+    if not _keyword_passes(listing.title.lower(), state):
+        return False
     if trust and trust.composite_score < state.min_trust_score:
         return False
     if state.min_price and listing.price < state.min_price:

@@ -3,6 +3,22 @@
     <!-- Search bar -->
     <header class="search-header">
       <form class="search-form" @submit.prevent="onSearch" role="search">
+        <label for="cat-select" class="sr-only">Category</label>
+        <select
+          id="cat-select"
+          v-model="filters.categoryId"
+          class="search-category-select"
+          :class="{ 'search-category-select--active': filters.categoryId }"
+          :disabled="store.loading"
+          title="Filter by category"
+        >
+          <option value="">All</option>
+          <optgroup v-for="group in CATEGORY_GROUPS" :key="group.label" :label="group.label">
+            <option v-for="cat in group.cats" :key="cat.id" :value="cat.id">
+              {{ cat.name }}
+            </option>
+          </optgroup>
+        </select>
         <label for="search-input" class="sr-only">Search listings</label>
         <input
           id="search-input"
@@ -17,13 +33,143 @@
           <MagnifyingGlassIcon class="search-btn-icon" aria-hidden="true" />
           <span>{{ store.loading ? 'Searching…' : 'Search' }}</span>
         </button>
+        <button
+          v-if="store.loading"
+          type="button"
+          class="cancel-btn"
+          @click="store.cancelSearch()"
+          title="Cancel search"
+        >✕ Cancel</button>
+        <button
+          v-else
+          type="button"
+          class="save-bookmark-btn"
+          :disabled="!queryInput.trim()"
+          :title="showSaveForm ? 'Cancel' : 'Save this search'"
+          @click="showSaveForm = !showSaveForm; if (showSaveForm) saveName = queryInput.trim()"
+        >
+          <BookmarkIcon class="search-btn-icon" aria-hidden="true" />
+        </button>
+      </form>
+      <form v-if="showSaveForm" class="save-inline-form" @submit.prevent="onSave">
+        <input
+          v-model="saveName"
+          class="save-name-input"
+          placeholder="Name this search…"
+          autocomplete="off"
+          autofocus
+        />
+        <button type="submit" class="save-confirm-btn">Save</button>
+        <button type="button" class="save-cancel-btn" @click="showSaveForm = false">✕</button>
+        <span v-if="saveSuccess" class="save-success">Saved!</span>
+        <span v-if="saveError" class="save-error">{{ saveError }}</span>
       </form>
     </header>
 
     <div class="search-body">
       <!-- Filter sidebar -->
       <aside class="filter-sidebar" aria-label="Search filters">
-        <h2 class="filter-heading">Filters</h2>
+
+        <!-- ── eBay Search Parameters ─────────────────────────────────────── -->
+        <!-- These are sent to eBay. Changes require a new search to take effect. -->
+        <h2 class="filter-section-heading filter-section-heading--search">
+          eBay Search
+        </h2>
+        <p class="filter-section-hint">Re-search to apply changes below</p>
+
+        <fieldset class="filter-group">
+          <legend class="filter-label">
+            Data source
+            <span
+              v-if="store.adapterUsed"
+              class="adapter-badge"
+              :class="store.adapterUsed === 'api' ? 'adapter-badge--api' : 'adapter-badge--scraper'"
+            >{{ store.adapterUsed === 'api' ? 'eBay API' : 'Scraper' }}</span>
+          </legend>
+          <div class="filter-pages" role="group" aria-label="Data source adapter">
+            <button
+              v-for="m in ADAPTER_MODES"
+              :key="m.value"
+              type="button"
+              class="filter-pages-btn"
+              :class="{ 'filter-pages-btn--active': filters.adapter === m.value }"
+              @click="filters.adapter = m.value"
+            >{{ m.label }}</button>
+          </div>
+          <p class="filter-pages-hint">Auto uses API when credentials are set</p>
+        </fieldset>
+
+        <fieldset class="filter-group">
+          <legend class="filter-label">Pages to fetch</legend>
+          <div class="filter-pages" role="group" aria-label="Number of result pages">
+            <button
+              v-for="p in [1, 2, 3, 5]"
+              :key="p"
+              type="button"
+              class="filter-pages-btn"
+              :class="{ 'filter-pages-btn--active': filters.pages === p }"
+              @click="filters.pages = p"
+            >{{ p }}</button>
+          </div>
+          <p class="filter-pages-hint">{{ pagesHint }}</p>
+        </fieldset>
+
+        <fieldset class="filter-group">
+          <legend class="filter-label">Price range</legend>
+          <div class="filter-row">
+            <input v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" />
+            <input v-model.number="filters.maxPrice" type="number" min="0" class="filter-input" placeholder="Max $" />
+          </div>
+          <p class="filter-pages-hint">Forwarded to eBay API</p>
+        </fieldset>
+
+        <fieldset class="filter-group">
+          <legend class="filter-label">Keywords</legend>
+          <div class="filter-row">
+            <label class="filter-label-sm" for="f-include">Must include</label>
+            <div class="filter-mode-row">
+              <button
+                v-for="m in INCLUDE_MODES"
+                :key="m.value"
+                type="button"
+                class="filter-pages-btn"
+                :class="{ 'filter-pages-btn--active': filters.mustIncludeMode === m.value }"
+                @click="filters.mustIncludeMode = m.value"
+              >{{ m.label }}</button>
+            </div>
+            <input
+              id="f-include"
+              v-model="filters.mustInclude"
+              type="text"
+              class="filter-input filter-input--keyword"
+              :placeholder="filters.mustIncludeMode === 'groups' ? 'founders|fe, 16gb\u2026' : '16gb, founders\u2026'"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <p class="filter-pages-hint">{{ includeHint }}</p>
+          </div>
+          <div class="filter-row">
+            <label class="filter-label-sm" for="f-exclude">Must exclude</label>
+            <input
+              id="f-exclude"
+              v-model="filters.mustExclude"
+              type="text"
+              class="filter-input filter-input--keyword filter-input--exclude"
+              placeholder="broken, parts\u2026"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <p class="filter-pages-hint">Excludes forwarded to eBay on re-search</p>
+          </div>
+        </fieldset>
+
+        <!-- ── Post-search Filters ────────────────────────────────────────── -->
+        <!-- Applied locally to current results — no re-search needed. -->
+        <div class="filter-section-divider" role="separator"></div>
+        <h2 class="filter-section-heading filter-section-heading--filter">
+          Filter Results
+        </h2>
+        <p class="filter-section-hint">Applied instantly to current results</p>
 
         <fieldset class="filter-group">
           <legend class="filter-label">Min Trust Score</legend>
@@ -41,69 +187,19 @@
           <span class="filter-range-val">{{ filters.minTrustScore ?? 0 }}</span>
         </fieldset>
 
-        <fieldset class="filter-group">
-          <legend class="filter-label">Pages to fetch</legend>
-          <div class="filter-pages" role="group" aria-label="Number of result pages">
-            <button
-              v-for="p in [1, 2, 3, 5]"
-              :key="p"
-              type="button"
-              class="filter-pages-btn"
-              :class="{ 'filter-pages-btn--active': filters.pages === p }"
-              @click="filters.pages = p"
-            >{{ p }}</button>
+        <details class="filter-group filter-collapsible">
+          <summary class="filter-collapsible-summary">Condition</summary>
+          <div class="filter-collapsible-body">
+            <label v-for="cond in CONDITIONS" :key="cond.value" class="filter-check">
+              <input
+                type="checkbox"
+                :value="cond.value"
+                v-model="filters.conditions"
+              />
+              {{ cond.label }}
+            </label>
           </div>
-          <p class="filter-pages-hint">{{ (filters.pages ?? 1) * 48 }} listings · {{ (filters.pages ?? 1) * 2 }} Playwright calls</p>
-        </fieldset>
-
-        <fieldset class="filter-group">
-          <legend class="filter-label">Keywords</legend>
-          <div class="filter-row">
-            <label class="filter-label-sm" for="f-include">Must include</label>
-            <input
-              id="f-include"
-              v-model="filters.mustInclude"
-              type="text"
-              class="filter-input filter-input--keyword"
-              placeholder="16gb, founders…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
-          <div class="filter-row">
-            <label class="filter-label-sm" for="f-exclude">Must exclude</label>
-            <input
-              id="f-exclude"
-              v-model="filters.mustExclude"
-              type="text"
-              class="filter-input filter-input--keyword filter-input--exclude"
-              placeholder="broken, parts…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
-          <p class="filter-pages-hint">Comma-separated · re-search to apply to eBay</p>
-        </fieldset>
-
-        <fieldset class="filter-group">
-          <legend class="filter-label">Price</legend>
-          <div class="filter-row">
-            <input v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" />
-            <input v-model.number="filters.maxPrice" type="number" min="0" class="filter-input" placeholder="Max $" />
-          </div>
-        </fieldset>
-
-        <fieldset class="filter-group">
-          <legend class="filter-label">Condition</legend>
-          <label v-for="cond in CONDITIONS" :key="cond.value" class="filter-check">
-            <input
-              type="checkbox"
-              :value="cond.value"
-              v-model="filters.conditions"
-            />
-            {{ cond.label }}
-          </label>
-        </fieldset>
+        </details>
 
         <fieldset class="filter-group">
           <legend class="filter-label">Seller</legend>
@@ -130,6 +226,18 @@
           <label class="filter-check">
             <input type="checkbox" v-model="filters.hideDuplicatePhotos" />
             Duplicate photos
+          </label>
+          <label class="filter-check">
+            <input type="checkbox" v-model="filters.hideScratchDent" />
+            Scratch / dent mentioned
+          </label>
+          <label class="filter-check">
+            <input type="checkbox" v-model="filters.hideLongOnMarket" />
+            Long on market (≥5 sightings, 14d+)
+          </label>
+          <label class="filter-check">
+            <input type="checkbox" v-model="filters.hidePriceDrop" />
+            Significant price drop (≥20%)
           </label>
         </fieldset>
       </aside>
@@ -163,12 +271,14 @@
                 · {{ hiddenCount }} hidden by filters
               </span>
             </p>
-            <label for="sort-select" class="sr-only">Sort by</label>
-            <select id="sort-select" v-model="sortBy" class="sort-select">
-              <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
+            <div class="toolbar-actions">
+              <label for="sort-select" class="sr-only">Sort by</label>
+              <select id="sort-select" v-model="sortBy" class="sort-select">
+                <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+            </div>
           </div>
 
           <!-- Cards -->
@@ -189,14 +299,55 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
-import { MagnifyingGlassIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
+import { ref, computed, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { MagnifyingGlassIcon, ExclamationTriangleIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import { useSearchStore } from '../stores/search'
-import type { Listing, TrustScore, SearchFilters } from '../stores/search'
+import type { Listing, TrustScore, SearchFilters, MustIncludeMode } from '../stores/search'
+import { useSavedSearchesStore } from '../stores/savedSearches'
 import ListingCard from '../components/ListingCard.vue'
 
+const route = useRoute()
 const store = useSearchStore()
+const savedStore = useSavedSearchesStore()
 const queryInput = ref('')
+
+// Save search UI state
+const showSaveForm = ref(false)
+const saveName = ref('')
+const saveError = ref<string | null>(null)
+const saveSuccess = ref(false)
+
+async function onSave() {
+  if (!saveName.value.trim()) return
+  saveError.value = null
+  try {
+    await savedStore.create(saveName.value.trim(), store.query, { ...filters })
+    saveSuccess.value = true
+    showSaveForm.value = false
+    saveName.value = ''
+    setTimeout(() => { saveSuccess.value = false }, 2500)
+  } catch (e) {
+    saveError.value = e instanceof Error ? e.message : 'Save failed'
+  }
+}
+
+// Auto-run if ?q= param present (e.g. launched from Saved Searches)
+onMounted(() => {
+  const q = route.query.q
+  if (typeof q === 'string' && q.trim()) {
+    queryInput.value = q.trim()
+    // Restore saved filters (e.g. category, price range, trust threshold)
+    const f = route.query.filters
+    if (typeof f === 'string') {
+      try {
+        const restored = JSON.parse(f) as Partial<SearchFilters>
+        Object.assign(filters, restored)
+      } catch { /* malformed — ignore */ }
+    }
+    onSearch()
+  }
+})
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
@@ -210,9 +361,15 @@ const filters = reactive<SearchFilters>({
   hideNewAccounts: false,
   hideSuspiciousPrice: false,
   hideDuplicatePhotos: false,
+  hideScratchDent: false,
+  hideLongOnMarket: false,
+  hidePriceDrop: false,
   pages: 1,
   mustInclude: '',
+  mustIncludeMode: 'all',
   mustExclude: '',
+  categoryId: '',
+  adapter: 'auto' as 'auto' | 'api' | 'scraper',
 })
 
 // Parse comma-separated keyword strings into trimmed, lowercase, non-empty term arrays
@@ -222,6 +379,82 @@ const parsedMustInclude = computed(() =>
 const parsedMustExclude = computed(() =>
   (filters.mustExclude ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
 )
+// Groups mode: comma = group separator, pipe = OR within group → string[][]
+// e.g. "founders|fe, 16gb" → [["founders","fe"], ["16gb"]]
+const parsedMustIncludeGroups = computed(() =>
+  (filters.mustInclude ?? '').split(',')
+    .map(group => group.split('|').map(t => t.trim().toLowerCase()).filter(Boolean))
+    .filter(g => g.length > 0)
+)
+
+const INCLUDE_MODES: { value: MustIncludeMode; label: string }[] = [
+  { value: 'all',    label: 'All' },
+  { value: 'any',    label: 'Any' },
+  { value: 'groups', label: 'Groups' },
+]
+
+const includeHint = computed(() => {
+  switch (filters.mustIncludeMode) {
+    case 'any':    return 'At least one term must appear'
+    case 'groups': return 'Comma = AND · pipe | = OR within group'
+    default:       return 'Every term must appear'
+  }
+})
+
+const ADAPTER_MODES: { value: 'auto' | 'api' | 'scraper'; label: string }[] = [
+  { value: 'auto',    label: 'Auto' },
+  { value: 'api',     label: 'API' },
+  { value: 'scraper', label: 'Scraper' },
+]
+
+const pagesHint = computed(() => {
+  const p = filters.pages ?? 1
+  const effective = filters.adapter === 'scraper' ? 'scraper'
+    : filters.adapter === 'api' ? 'api'
+    : store.adapterUsed ?? 'api'  // assume API until first search
+  if (effective === 'scraper') {
+    return `${p * 48} listings · ${p} Playwright calls`
+  }
+  return `Up to ${p * 200} listings · ${p} Browse API call${p > 1 ? 's' : ''}`
+})
+
+const CATEGORY_GROUPS = [
+  { label: 'Computers', cats: [
+    { id: '175673', name: 'Computer Components & Parts' },
+    { id: '27386',  name: 'Graphics / Video Cards' },
+    { id: '164',    name: 'CPUs / Processors' },
+    { id: '1244',   name: 'Motherboards' },
+    { id: '170083', name: 'Memory (RAM)' },
+    { id: '56083',  name: 'Hard Drives & SSDs' },
+    { id: '42017',  name: 'Power Supplies' },
+    { id: '42014',  name: 'Computer Cases' },
+    { id: '11176',  name: 'Networking Equipment' },
+    { id: '80053',  name: 'Monitors' },
+    { id: '177',    name: 'Laptops' },
+    { id: '179',    name: 'Desktop Computers' },
+  ]},
+  { label: 'Mobile', cats: [
+    { id: '9355',   name: 'Smartphones' },
+    { id: '171485', name: 'Tablets & eReaders' },
+  ]},
+  { label: 'Gaming', cats: [
+    { id: '139971', name: 'Game Consoles' },
+    { id: '1249',   name: 'Video Games' },
+  ]},
+  { label: 'Audio & Video', cats: [
+    { id: '14969',  name: 'Home Audio' },
+    { id: '32852',  name: 'TVs' },
+  ]},
+  { label: 'Cameras', cats: [
+    { id: '625',    name: 'Cameras & Photo' },
+  ]},
+  { label: 'Collectibles', cats: [
+    { id: '183454', name: 'Trading Cards' },
+    { id: '64482',  name: 'Sports Memorabilia' },
+    { id: '11116',  name: 'Coins & Currency' },
+    { id: '20081',  name: 'Antiques' },
+  ]},
+]
 
 const CONDITIONS = [
   { value: 'new',       label: 'New' },
@@ -277,7 +510,18 @@ function passesFilter(listing: Listing): boolean {
 
   // Keyword filtering — substring match on lowercased title
   const title = listing.title.toLowerCase()
-  if (parsedMustInclude.value.some(term => !title.includes(term))) return false
+  if (parsedMustInclude.value.length) {
+    const mode = filters.mustIncludeMode ?? 'all'
+    if (mode === 'any') {
+      if (!parsedMustInclude.value.some(term => title.includes(term))) return false
+    } else if (mode === 'groups') {
+      // CNF: must match at least one alternative from every group
+      if (!parsedMustIncludeGroups.value.every(group => group.some(alt => title.includes(alt)))) return false
+    } else {
+      // 'all': every term must appear
+      if (parsedMustInclude.value.some(term => !title.includes(term))) return false
+    }
+  }
   if (parsedMustExclude.value.some(term => title.includes(term))) return false
 
   if (filters.minTrustScore && trust && trust.composite_score < filters.minTrustScore) return false
@@ -286,7 +530,7 @@ function passesFilter(listing: Listing): boolean {
   if (filters.conditions?.length && !filters.conditions.includes(listing.condition)) return false
 
   if (seller) {
-    if (filters.minAccountAgeDays && seller.account_age_days < filters.minAccountAgeDays) return false
+    if (filters.minAccountAgeDays && seller.account_age_days != null && seller.account_age_days < filters.minAccountAgeDays) return false
     if (filters.minFeedbackCount && seller.feedback_count < filters.minFeedbackCount) return false
   }
 
@@ -296,6 +540,9 @@ function passesFilter(listing: Listing): boolean {
     if (filters.hideNewAccounts && flags.includes('account_under_30_days')) return false
     if (filters.hideSuspiciousPrice && flags.includes('suspicious_price')) return false
     if (filters.hideDuplicatePhotos && flags.includes('duplicate_photo')) return false
+    if (filters.hideScratchDent && flags.includes('scratch_dent_mentioned')) return false
+    if (filters.hideLongOnMarket && flags.includes('long_on_market')) return false
+    if (filters.hidePriceDrop && flags.includes('significant_price_drop')) return false
   }
 
   return true
@@ -334,6 +581,30 @@ async function onSearch() {
   display: flex;
   gap: var(--space-3);
   max-width: 760px;
+}
+
+.search-category-select {
+  padding: var(--space-3) var(--space-3);
+  background: var(--color-surface-raised);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 160px;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+.search-category-select--active {
+  border-color: var(--app-primary);
+  color: var(--color-text);
+  font-weight: 500;
+}
+.search-category-select:focus {
+  outline: none;
+  border-color: var(--app-primary);
 }
 
 .search-input {
@@ -376,6 +647,49 @@ async function onSearch() {
 .search-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .search-btn-icon { width: 1.1rem; height: 1.1rem; }
 
+.cancel-btn {
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: 1.5px solid var(--color-error);
+  border-radius: var(--radius-md);
+  color: var(--color-error);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 150ms ease;
+}
+.cancel-btn:hover { background: rgba(248, 81, 73, 0.1); }
+
+.save-bookmark-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background: var(--color-surface-raised);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease;
+  flex-shrink: 0;
+}
+.save-bookmark-btn:hover:not(:disabled) {
+  border-color: var(--app-primary);
+  color: var(--app-primary);
+}
+.save-bookmark-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.save-inline-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 0;
+  max-width: 760px;
+}
+
 /* Two-column layout */
 .search-body {
   display: flex;
@@ -402,6 +716,38 @@ async function onSearch() {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: var(--space-2);
+}
+
+/* Section headings that separate eBay Search params from local filters */
+.filter-section-heading {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-1);
+}
+.filter-section-heading--search {
+  color: var(--app-primary);
+  background: color-mix(in srgb, var(--app-primary) 10%, transparent);
+}
+.filter-section-heading--filter {
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-text-muted) 8%, transparent);
+}
+
+.filter-section-hint {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.filter-section-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-2) 0;
 }
 
 .filter-group {
@@ -472,6 +818,25 @@ async function onSearch() {
   font-size: 0.75rem;
 }
 
+.adapter-badge {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.adapter-badge--api     { background: color-mix(in srgb, var(--app-primary) 15%, transparent); color: var(--app-primary); }
+.adapter-badge--scraper { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+
+.filter-category-select {
+  cursor: pointer;
+  appearance: auto;
+}
+
 .filter-input--exclude {
   border-color: color-mix(in srgb, var(--color-error) 40%, var(--color-border));
 }
@@ -479,6 +844,51 @@ async function onSearch() {
 .filter-input--exclude:focus {
   outline: none;
   border-color: var(--color-error);
+}
+
+/* Mode toggle row — same pill style as pages buttons */
+.filter-mode-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Collapsible condition picker */
+.filter-collapsible {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.filter-collapsible-summary {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  user-select: none;
+}
+
+.filter-collapsible-summary::after {
+  content: '›';
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 150ms ease;
+}
+
+.filter-collapsible[open] .filter-collapsible-summary::after {
+  transform: rotate(90deg);
+}
+
+.filter-collapsible-summary::-webkit-details-marker { display: none; }
+
+.filter-collapsible-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
 }
 
 .filter-pages {
@@ -567,6 +977,76 @@ async function onSearch() {
 }
 
 .results-hidden { color: var(--color-warning); }
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.save-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+.save-btn:hover { border-color: var(--app-primary); color: var(--app-primary); }
+.save-btn-icon { width: 0.9rem; height: 0.9rem; }
+
+.save-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.save-name-input {
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--app-primary);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  width: 160px;
+}
+.save-name-input:focus { outline: none; }
+.save-confirm-btn {
+  padding: var(--space-1) var(--space-3);
+  background: var(--app-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-inverse);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.save-cancel-btn {
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.save-success {
+  font-size: 0.8125rem;
+  color: var(--color-success);
+  font-weight: 600;
+}
+.save-error {
+  font-size: 0.75rem;
+  color: var(--color-error);
+  margin: 0;
+}
 
 .sort-select {
   padding: var(--space-2) var(--space-3);

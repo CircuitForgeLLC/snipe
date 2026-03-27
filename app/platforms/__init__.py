@@ -15,6 +15,7 @@ class SearchFilters:
     pages: int = 1          # number of result pages to fetch (48 listings/page)
     must_include: list[str] = field(default_factory=list)  # client-side title filter
     must_exclude: list[str] = field(default_factory=list)  # forwarded to eBay -term AND client-side
+    category_id: Optional[str] = None                      # eBay category ID (e.g. "27386" = GPUs)
 
 
 class PlatformAdapter(ABC):

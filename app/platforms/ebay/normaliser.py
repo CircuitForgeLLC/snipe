@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from datetime import datetime, timezone
+from typing import Optional
 from app.db.models import Listing, Seller
 
 
@@ -41,6 +42,10 @@ def normalise_listing(raw: dict) -> Listing:
         except ValueError:
             pass
 
+    # Leaf category is categories[0] (most specific); parent path follows.
+    categories = raw.get("categories", [])
+    category_name: Optional[str] = categories[0]["categoryName"] if categories else None
+
     seller = raw.get("seller", {})
     return Listing(
         platform="ebay",
@@ -55,13 +60,14 @@ def normalise_listing(raw: dict) -> Listing:
         listing_age_days=listing_age_days,
         buying_format=buying_format,
         ends_at=ends_at,
+        category_name=category_name,
     )
 
 
 def normalise_seller(raw: dict) -> Seller:
     feedback_pct = float(raw.get("feedbackPercentage", "0").strip("%")) / 100.0
 
-    account_age_days = 0
+    account_age_days: Optional[int] = None   # None = registrationDate not in API response
     reg_date_raw = raw.get("registrationDate", "")
     if reg_date_raw:
         try:

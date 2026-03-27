@@ -11,6 +11,7 @@ services:
       context: ..
       dockerfile: snipe/Dockerfile
     restart: unless-stopped
+    env_file: .env
     # No network_mode: host — isolated on snipe-cloud-net; nginx reaches it via 'api:8510'
     volumes:
       - /devl/snipe-cloud-data:/app/snipe/data

@@ -61,8 +61,8 @@
           {{ flagLabel(flag) }}
         </span>
       </div>
-      <p v-if="trust?.score_is_partial" class="card__partial-warning">
-        ⚠ Partial score — some data unavailable
+      <p v-if="pendingSignalNames.length" class="card__score-pending">
+        ↻ Updating: {{ pendingSignalNames.join(', ') }}
       </p>
       <p v-if="!trust" class="card__partial-warning">
         ⚠ Could not score this listing
@@ -72,9 +72,32 @@
     <!-- Score + price column -->
     <div class="card__score-col">
       <!-- Trust score badge -->
-      <div class="card__trust" :class="trustClass" :title="`Trust score: ${trust?.composite_score ?? '?'}/100`">
+      <div
+        class="card__trust"
+        :class="[trustClass, { 'card__trust--partial': trust?.score_is_partial }]"
+        :title="trustBadgeTitle"
+      >
         <span class="card__trust-num">{{ trust?.composite_score ?? '?' }}</span>
         <span class="card__trust-label">Trust</span>
+        <!-- Signal dots: one per scoring signal, grey = pending -->
+        <span v-if="trust" class="card__signal-dots" aria-hidden="true">
+          <span
+            v-for="dot in signalDots"
+            :key="dot.key"
+            class="card__signal-dot"
+            :class="dot.pending ? 'card__signal-dot--pending' : 'card__signal-dot--present'"
+            :title="dot.label"
+          />
+        </span>
+        <!-- Jump the queue: force enrichment for this seller -->
+        <button
+          v-if="pendingSignalNames.length"
+          class="card__enrich-btn"
+          :class="{ 'card__enrich-btn--spinning': enriching, 'card__enrich-btn--error': enrichError }"
+          :title="enrichError ? 'Enrichment failed — try again' : 'Refresh score now'"
+          :disabled="enriching"
+          @click.stop="onEnrich"
+        >{{ enrichError ? '✗' : '↻' }}</button>
       </div>
 
       <!-- Price -->
@@ -99,6 +122,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Listing, TrustScore, Seller } from '../stores/search'
+import { useSearchStore } from '../stores/search'
 
 const props = defineProps<{
   listing: Listing
@@ -106,6 +130,23 @@ const props = defineProps<{
   seller: Seller | null
   marketPrice: number | null
 }>()
+
+const store = useSearchStore()
+const enriching = ref(false)
+const enrichError = ref(false)
+
+async function onEnrich() {
+  if (enriching.value) return
+  enriching.value = true
+  enrichError.value = false
+  try {
+    await store.enrichSeller(props.listing.seller_platform_id, props.listing.platform_listing_id)
+  } catch {
+    enrichError.value = true
+  } finally {
+    enriching.value = false
+  }
+}
 
 const imgFailed = ref(false)
 
@@ -149,6 +190,7 @@ const conditionLabel = computed(() => {
 const accountAgeLabel = computed(() => {
   if (!props.seller) return ''
   const days = props.seller.account_age_days
+  if (days == null) return 'member'
   if (days >= 365) return `${Math.floor(days / 365)}yr member`
   return `${days}d member`
 })
@@ -180,6 +222,32 @@ const trustClass = computed(() => {
   if (s >= 80) return 'card__trust--high'
   if (s >= 50) return 'card__trust--mid'
   return 'card__trust--low'
+})
+
+interface SignalDot { key: string; label: string; pending: boolean }
+
+const signalDots = computed<SignalDot[]>(() => {
+  const agePending = props.seller?.account_age_days == null
+  const catPending = !props.seller || props.seller.category_history_json === '{}'
+  const mktPending = props.marketPrice == null
+  return [
+    { key: 'feedback_count',    label: 'Feedback count',    pending: false },
+    { key: 'feedback_ratio',    label: 'Feedback ratio',    pending: false },
+    { key: 'account_age',       label: agePending ? 'Account age: pending' : 'Account age',        pending: agePending },
+    { key: 'price_vs_market',   label: mktPending ? 'Market price: pending' : 'vs market price',  pending: mktPending },
+    { key: 'category_history',  label: catPending ? 'Category history: pending' : 'Category history', pending: catPending },
+  ]
+})
+
+const pendingSignalNames = computed<string[]>(() => {
+  if (!props.trust?.score_is_partial) return []
+  return signalDots.value.filter(d => d.pending).map(d => d.label.replace(': pending', ''))
+})
+
+const trustBadgeTitle = computed(() => {
+  const base = `Trust score: ${props.trust?.composite_score ?? '?'}/100`
+  if (!pendingSignalNames.value.length) return base
+  return `${base} · pending: ${pendingSignalNames.value.join(', ')} (search again to update)`
 })
 
 const isSteal = computed(() => {
@@ -311,6 +379,13 @@ const formattedMarket = computed(() => {
   margin: 0;
 }
 
+.card__score-pending {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
 /* Score + price column */
 .card__score-col {
   display: flex;
@@ -349,6 +424,51 @@ const formattedMarket = computed(() => {
 .card__trust--mid  { color: var(--trust-mid); }
 .card__trust--low  { color: var(--trust-low); }
 .card__trust--unknown { color: var(--color-text-muted); }
+
+.card__trust--partial {
+  animation: trust-pulse 2.5s ease-in-out infinite;
+}
+@keyframes trust-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+.card__signal-dots {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+  justify-content: center;
+}
+.card__signal-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.card__signal-dot--present { background: currentColor; opacity: 0.7; }
+.card__signal-dot--pending { background: var(--color-border); opacity: 1; }
+
+.card__enrich-btn {
+  margin-top: 4px;
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  color: currentColor;
+  cursor: pointer;
+  font-size: 0.65rem;
+  line-height: 1;
+  opacity: 0.6;
+  padding: 1px 4px;
+  transition: opacity 150ms ease;
+}
+.card__enrich-btn:hover:not(:disabled) { opacity: 1; }
+.card__enrich-btn:disabled { cursor: default; }
+.card__enrich-btn--spinning { animation: enrich-spin 0.8s linear infinite; }
+.card__enrich-btn--error { color: var(--color-error); opacity: 1; }
+@keyframes enrich-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 .card__price-wrap {
   display: flex;

@@ -33,6 +33,9 @@ class FilterState:
     hide_marketing_photos: bool = False
     hide_suspicious_price: bool = False
     hide_duplicate_photos: bool = False
+    must_include: str = ""
+    must_include_mode: str = "all"   # "all" | "any" | "groups"
+    must_exclude: str = ""
 
 
 def build_filter_options(
@@ -77,6 +80,29 @@ def render_filter_sidebar(
 
     st.sidebar.markdown("### Filters")
     st.sidebar.caption(f"{len(pairs)} results")
+
+    st.sidebar.markdown("**Keywords**")
+    state.must_include_mode = st.sidebar.radio(
+        "Must include mode",
+        options=["all", "any", "groups"],
+        format_func=lambda m: {"all": "All (AND)", "any": "Any (OR)", "groups": "Groups (CNF)"}[m],
+        horizontal=True,
+        key="include_mode",
+        label_visibility="collapsed",
+    )
+    hint = {
+        "all": "Every term must appear",
+        "any": "At least one term must appear",
+        "groups": "Comma = AND · pipe | = OR within group",
+    }[state.must_include_mode]
+    state.must_include = st.sidebar.text_input(
+        "Must include", value="", placeholder="16gb, founders…" if state.must_include_mode != "groups" else "founders|fe, 16gb…",
+        key="must_include",
+    )
+    st.sidebar.caption(hint)
+    state.must_exclude = st.sidebar.text_input(
+        "Must exclude", value="", placeholder="broken, parts…", key="must_exclude",
+    )
 
     state.min_trust_score = st.sidebar.slider("Min trust score", 0, 100, 0, key="min_trust")
     st.sidebar.caption(
