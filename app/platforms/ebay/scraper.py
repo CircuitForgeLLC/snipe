@@ -342,7 +342,13 @@ class ScrapedEbayAdapter(PlatformAdapter):
         return self._fetch_url(url)
 
     def _fetch_item_html(self, item_id: str) -> str:
-        """Fetch a single eBay listing page. /itm/ pages pass Kasada; /usr/ pages do not."""
+        """Fetch a single eBay listing page. /itm/ pages pass Kasada; /usr/ pages do not.
+
+        Browse API returns itemId as "v1|123456789012|0"; extract the numeric
+        segment so the URL resolves correctly (scraper IDs are already numeric).
+        """
+        if "|" in item_id:
+            item_id = item_id.split("|")[1]
         return self._fetch_url(f"{EBAY_ITEM_URL}{item_id}")
 
     @staticmethod
