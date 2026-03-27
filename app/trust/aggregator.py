@@ -9,6 +9,11 @@ HARD_FILTER_AGE_DAYS = 7
 HARD_FILTER_BAD_RATIO_MIN_COUNT = 20
 HARD_FILTER_BAD_RATIO_THRESHOLD = 0.80
 
+# Sellers above this feedback count are treated as established retailers.
+# Stock photo reuse (duplicate_photo) is suppressed for them — large retailers
+# legitimately share manufacturer images across many listings.
+_ESTABLISHED_RETAILER_FEEDBACK_THRESHOLD = 1000
+
 # Title keywords that suggest cosmetic damage or wear (free-tier title scan).
 # Description-body scan (paid BSL feature) runs via BTF enrichment — not implemented yet.
 _SCRATCH_DENT_KEYWORDS = frozenset([
@@ -103,7 +108,11 @@ class Aggregator:
             red_flags.append("low_feedback_count")
         if signal_scores.get("price_vs_market") == 0:  # only flag when data exists and price is genuinely <50% of market
             red_flags.append("suspicious_price")
-        if photo_hash_duplicate:
+        is_established_retailer = (
+            seller is not None
+            and seller.feedback_count >= _ESTABLISHED_RETAILER_FEEDBACK_THRESHOLD
+        )
+        if photo_hash_duplicate and not is_established_retailer:
             red_flags.append("duplicate_photo")
         if listing_title and _has_damage_keywords(listing_title):
             red_flags.append("scratch_dent_mentioned")
