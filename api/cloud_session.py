@@ -100,11 +100,13 @@ def _extract_session_token(header_value: str) -> str:
 
 
 def validate_session_jwt(token: str) -> str:
-    """Validate a cf_session JWT and return the Directus user_id (sub claim).
+    """Validate a cf_session JWT and return the Directus user_id.
 
     Uses HMAC-SHA256 verification against DIRECTUS_JWT_SECRET (same secret
     cf-directus uses to sign session tokens). Returns user_id on success,
     raises HTTPException(401) on failure.
+
+    Directus 11+ uses 'id' (not 'sub') for the user UUID in its JWT payload.
     """
     try:
         import jwt as pyjwt
@@ -112,9 +114,9 @@ def validate_session_jwt(token: str) -> str:
             token,
             DIRECTUS_JWT_SECRET,
             algorithms=["HS256"],
-            options={"require": ["sub", "exp"]},
+            options={"require": ["id", "exp"]},
         )
-        return payload["sub"]
+        return payload["id"]
     except Exception as exc:
         log.debug("JWT validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="Session invalid or expired")
