@@ -64,9 +64,9 @@ BROWSE_BASE = {
 
 
 class EbayAdapter(PlatformAdapter):
-    def __init__(self, token_manager: EbayTokenManager, store: Store, env: str = "production"):
+    def __init__(self, token_manager: EbayTokenManager, shared_store: Store, env: str = "production"):
         self._tokens = token_manager
-        self._store = store
+        self._store = shared_store
         self._env = env
         self._browse_base = BROWSE_BASE[env]
 

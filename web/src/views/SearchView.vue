@@ -107,8 +107,13 @@
               :key="p"
               type="button"
               class="filter-pages-btn"
-              :class="{ 'filter-pages-btn--active': filters.pages === p }"
-              @click="filters.pages = p"
+              :class="{
+                'filter-pages-btn--active': filters.pages === p,
+                'filter-pages-btn--locked': p > session.features.max_pages,
+              }"
+              :disabled="p > session.features.max_pages"
+              :title="p > session.features.max_pages ? 'Upgrade to fetch more pages' : undefined"
+              @click="p <= session.features.max_pages && (filters.pages = p)"
             >{{ p }}</button>
           </div>
           <p class="filter-pages-hint">{{ pagesHint }}</p>
@@ -305,11 +310,13 @@ import { MagnifyingGlassIcon, ExclamationTriangleIcon, BookmarkIcon } from '@her
 import { useSearchStore } from '../stores/search'
 import type { Listing, TrustScore, SearchFilters, MustIncludeMode } from '../stores/search'
 import { useSavedSearchesStore } from '../stores/savedSearches'
+import { useSessionStore } from '../stores/session'
 import ListingCard from '../components/ListingCard.vue'
 
 const route = useRoute()
 const store = useSearchStore()
 const savedStore = useSavedSearchesStore()
+const session = useSessionStore()
 const queryInput = ref('')
 
 // Save search UI state
@@ -919,6 +926,12 @@ async function onSearch() {
   background: var(--app-primary);
   border-color: var(--app-primary);
   color: var(--color-text-inverse);
+}
+
+.filter-pages-btn--locked,
+.filter-pages-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .filter-pages-hint {

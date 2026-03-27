@@ -283,8 +283,8 @@ class ScrapedEbayAdapter(PlatformAdapter):
     category_history) cause TrustScorer to set score_is_partial=True.
     """
 
-    def __init__(self, store: Store, delay: float = 1.0):
-        self._store = store
+    def __init__(self, shared_store: Store, delay: float = 1.0):
+        self._store = shared_store
         self._delay = delay
 
     def _fetch_url(self, url: str) -> str:

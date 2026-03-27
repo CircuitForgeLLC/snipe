@@ -12,9 +12,17 @@ services:
       dockerfile: snipe/Dockerfile
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Cloud mode — enables per-user DB isolation and Heimdall tier resolution.
+      # All values may be overridden by setting them in .env (env_file takes precedence
+      # over environment: only when the same key appears in both — Docker merges them,
+      # env_file wins for duplicates).
+      CLOUD_MODE: "true"
+      CLOUD_DATA_ROOT: /devl/snipe-cloud-data
+      # DIRECTUS_JWT_SECRET, HEIMDALL_URL, HEIMDALL_ADMIN_TOKEN — set in .env (never commit)
     # No network_mode: host — isolated on snipe-cloud-net; nginx reaches it via 'api:8510'
     volumes:
-      - /devl/snipe-cloud-data:/app/snipe/data
+      - /devl/snipe-cloud-data:/devl/snipe-cloud-data
     networks:
       - snipe-cloud-net
 

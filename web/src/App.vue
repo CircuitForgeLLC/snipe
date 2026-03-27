@@ -17,15 +17,18 @@ import { RouterView } from 'vue-router'
 import { useMotion } from './composables/useMotion'
 import { useSnipeMode } from './composables/useSnipeMode'
 import { useKonamiCode } from './composables/useKonamiCode'
+import { useSessionStore } from './stores/session'
 import AppNav from './components/AppNav.vue'
 
 const motion = useMotion()
 const { activate, restore } = useSnipeMode()
+const session = useSessionStore()
 
 useKonamiCode(activate)
 
 onMounted(() => {
-  restore()  // re-apply snipe mode from localStorage on hard reload
+  restore()           // re-apply snipe mode from localStorage on hard reload
+  session.bootstrap() // fetch tier + feature flags from API
 })
 </script>
 

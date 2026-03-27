@@ -8,7 +8,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,13 +21,11 @@ from app.platforms.ebay.adapter import EbayAdapter
 from app.platforms.ebay.auth import EbayTokenManager
 from app.platforms.ebay.query_builder import expand_queries, parse_groups
 from app.trust import TrustScorer
+from api.cloud_session import CloudUser, compute_features, get_session
 from api.ebay_webhook import router as ebay_webhook_router
 
 load_env(Path(".env"))
 log = logging.getLogger(__name__)
-
-_DB_PATH = Path(os.environ.get("SNIPE_DB", "data/snipe.db"))
-_DB_PATH.parent.mkdir(exist_ok=True)
 
 
 def _ebay_creds() -> tuple[str, str, str]:
@@ -61,7 +59,27 @@ def health():
     return {"status": "ok"}
 
 
-def _trigger_scraper_enrichment(listings: list, store: Store) -> None:
+@app.get("/api/session")
+def session_info(session: CloudUser = Depends(get_session)):
+    """Return the current session tier and computed feature flags.
+
+    Used by the Vue frontend to gate UI features (pages slider cap,
+    saved search limits, shared DB badges, etc.) without hardcoding
+    tier logic client-side.
+    """
+    features = compute_features(session.tier)
+    return {
+        "user_id": session.user_id,
+        "tier": session.tier,
+        "features": dataclasses.asdict(features),
+    }
+
+
+def _trigger_scraper_enrichment(
+    listings: list,
+    shared_store: Store,
+    shared_db: Path,
+) -> None:
     """Fire-and-forget background enrichment for missing seller signals.
 
     Two enrichment passes run concurrently in the same daemon thread:
@@ -72,6 +90,10 @@ def _trigger_scraper_enrichment(listings: list, store: Store) -> None:
     future searches. Uses ScrapedEbayAdapter's Playwright stack regardless of
     which adapter was used for the main search (Shopping API handles age for
     the API adapter inline; BTF is the fallback for no-creds / scraper mode).
+
+    shared_store: used for pre-flight seller checks (same-thread reads).
+    shared_db: path passed to background thread — it creates its own Store
+               (sqlite3 connections are not thread-safe).
     """
     # Caps per search: limits Playwright sessions launched in the background so we
     # don't hammer Kasada or spin up dozens of Xvfb instances after a large search.
@@ -86,7 +108,7 @@ def _trigger_scraper_enrichment(listings: list, store: Store) -> None:
         sid = listing.seller_platform_id
         if not sid:
             continue
-        seller = store.get_seller("ebay", sid)
+        seller = shared_store.get_seller("ebay", sid)
         if not seller:
             continue
         if (seller.account_age_days is None
@@ -108,7 +130,7 @@ def _trigger_scraper_enrichment(listings: list, store: Store) -> None:
 
     def _run():
         try:
-            enricher = ScrapedEbayAdapter(Store(_DB_PATH))
+            enricher = ScrapedEbayAdapter(Store(shared_db))
             if needs_btf:
                 enricher.enrich_sellers_btf(needs_btf, max_workers=2)
                 log.info("BTF enrichment complete for %d sellers", len(needs_btf))
@@ -128,28 +150,31 @@ def _parse_terms(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
-def _make_adapter(store: Store, force: str = "auto"):
+def _make_adapter(shared_store: Store, force: str = "auto"):
     """Return the appropriate adapter.
 
     force: "auto" | "api" | "scraper"
       auto    — API if creds present, else scraper
       api     — Browse API (raises if no creds)
       scraper — Playwright scraper regardless of creds
+
+    Adapters receive shared_store because they only read/write sellers and
+    market_comps — never listings. Listings are returned and saved by the caller.
     """
     client_id, client_secret, env = _ebay_creds()
     has_creds = bool(client_id and client_secret)
 
     if force == "scraper":
-        return ScrapedEbayAdapter(store)
+        return ScrapedEbayAdapter(shared_store)
     if force == "api":
         if not has_creds:
             raise ValueError("adapter=api requested but no eBay API credentials configured")
-        return EbayAdapter(EbayTokenManager(client_id, client_secret, env), store, env=env)
+        return EbayAdapter(EbayTokenManager(client_id, client_secret, env), shared_store, env=env)
     # auto
     if has_creds:
-        return EbayAdapter(EbayTokenManager(client_id, client_secret, env), store, env=env)
+        return EbayAdapter(EbayTokenManager(client_id, client_secret, env), shared_store, env=env)
     log.debug("No eBay API credentials — using scraper adapter (partial trust scores)")
-    return ScrapedEbayAdapter(store)
+    return ScrapedEbayAdapter(shared_store)
 
 
 def _adapter_name(force: str = "auto") -> str:
@@ -173,9 +198,14 @@ def search(
     must_exclude: str = "",        # comma-separated; forwarded to eBay -term + client-side
     category_id: str = "",         # eBay category ID — forwarded to Browse API / scraper _sacat
     adapter: str = "auto",         # "auto" | "api" | "scraper" — override adapter selection
+    session: CloudUser = Depends(get_session),
 ):
     if not q.strip():
         return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None, "adapter_used": _adapter_name(adapter)}
+
+    # Cap pages to the tier's maximum — free cloud users get 1 page, local gets unlimited.
+    features = compute_features(session.tier)
+    pages = min(max(1, pages), features.max_pages)
 
     must_exclude_terms = _parse_terms(must_exclude)
 
@@ -190,20 +220,23 @@ def search(
     base_filters = SearchFilters(
         max_price=max_price if max_price > 0 else None,
         min_price=min_price if min_price > 0 else None,
-        pages=max(1, pages),
+        pages=pages,
         must_exclude=must_exclude_terms,  # forwarded to eBay -term by the scraper
         category_id=category_id.strip() or None,
     )
 
     adapter_used = _adapter_name(adapter)
 
+    shared_db = session.shared_db
+    user_db = session.user_db
+
     # Each thread creates its own Store — sqlite3 check_same_thread=True.
     def _run_search(ebay_query: str) -> list:
-        return _make_adapter(Store(_DB_PATH), adapter).search(ebay_query, base_filters)
+        return _make_adapter(Store(shared_db), adapter).search(ebay_query, base_filters)
 
     def _run_comps() -> None:
         try:
-            _make_adapter(Store(_DB_PATH), adapter).get_completed_sales(q, pages)
+            _make_adapter(Store(shared_db), adapter).get_completed_sales(q, pages)
         except Exception:
             log.warning("comps: unhandled exception for %r", q, exc_info=True)
 
@@ -224,39 +257,44 @@ def search(
                     if listing.platform_listing_id not in seen_ids:
                         seen_ids.add(listing.platform_listing_id)
                         listings.append(listing)
-            comps_future.result()  # side-effect: market comp written to DB
+            comps_future.result()  # side-effect: market comp written to shared DB
     except Exception as e:
         log.warning("eBay scrape failed: %s", e)
         raise HTTPException(status_code=502, detail=f"eBay search failed: {e}")
 
     log.info("Multi-search: %d queries → %d unique listings", len(ebay_queries), len(listings))
 
-    # Main-thread store for all post-search reads/writes — fresh connection, same thread.
-    store = Store(_DB_PATH)
-    store.save_listings(listings)
+    # Main-thread stores — fresh connections, same thread.
+    # shared_store: sellers, market_comps (all users share this data)
+    # user_store: listings, saved_searches (per-user in cloud mode, same file in local mode)
+    shared_store = Store(shared_db)
+    user_store = Store(user_db)
+
+    user_store.save_listings(listings)
 
     # Derive category_history from accumulated listing data — free for API adapter
     # (category_name comes from Browse API response), no-op for scraper listings (category_name=None).
+    # Reads listings from user_store, writes seller categories to shared_store.
     seller_ids = list({l.seller_platform_id for l in listings if l.seller_platform_id})
-    n_cat = store.refresh_seller_categories("ebay", seller_ids)
+    n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
     if n_cat:
         log.info("Category history derived for %d sellers from listing data", n_cat)
 
     # Re-fetch to hydrate staging fields (times_seen, first_seen_at, id, price_at_first_seen)
     # that are only available from the DB after the upsert.
-    staged = store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
+    staged = user_store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
     listings = [staged.get(l.platform_listing_id, l) for l in listings]
 
     # BTF enrichment: scrape /itm/ pages for sellers missing account_age_days.
     # Runs in the background so it doesn't delay the response; next search of
     # the same sellers will have full scores.
-    _trigger_scraper_enrichment(listings, store)
+    _trigger_scraper_enrichment(listings, shared_store, shared_db)
 
-    scorer = TrustScorer(store)
+    scorer = TrustScorer(shared_store)
     trust_scores_list = scorer.score_batch(listings, q)
 
     query_hash = hashlib.md5(q.encode()).hexdigest()
-    comp = store.get_market_comp("ebay", query_hash)
+    comp = shared_store.get_market_comp("ebay", query_hash)
     market_price = comp.median_price if comp else None
 
     # Serialize — keyed by platform_listing_id for easy Vue lookup
@@ -267,11 +305,11 @@ def search(
     }
     seller_map = {
         listing.seller_platform_id: dataclasses.asdict(
-            store.get_seller("ebay", listing.seller_platform_id)
+            shared_store.get_seller("ebay", listing.seller_platform_id)
         )
         for listing in listings
         if listing.seller_platform_id
-        and store.get_seller("ebay", listing.seller_platform_id)
+        and shared_store.get_seller("ebay", listing.seller_platform_id)
     }
 
     return {
@@ -286,7 +324,12 @@ def search(
 # ── On-demand enrichment ──────────────────────────────────────────────────────
 
 @app.post("/api/enrich")
-def enrich_seller(seller: str, listing_id: str, query: str = ""):
+def enrich_seller(
+    seller: str,
+    listing_id: str,
+    query: str = "",
+    session: CloudUser = Depends(get_session),
+):
     """Synchronous on-demand enrichment for a single seller + re-score.
 
     Runs enrichment paths in parallel:
@@ -298,38 +341,45 @@ def enrich_seller(seller: str, listing_id: str, query: str = ""):
     Returns the updated trust_score and seller so the frontend can patch in-place.
     """
     import threading
-    store = Store(_DB_PATH)
 
-    seller_obj = store.get_seller("ebay", seller)
+    shared_store = Store(session.shared_db)
+    user_store = Store(session.user_db)
+    shared_db = session.shared_db
+
+    seller_obj = shared_store.get_seller("ebay", seller)
     if not seller_obj:
         raise HTTPException(status_code=404, detail=f"Seller '{seller}' not found")
 
     # Fast path: Shopping API for account age (inline, no Playwright)
     try:
-        api_adapter = _make_adapter(store, "api")
+        api_adapter = _make_adapter(shared_store, "api")
         if hasattr(api_adapter, "enrich_sellers_shopping_api"):
             api_adapter.enrich_sellers_shopping_api([seller])
     except Exception:
         pass  # no API creds — fall through to BTF
 
-    seller_obj = store.get_seller("ebay", seller)
+    seller_obj = shared_store.get_seller("ebay", seller)
     needs_btf = seller_obj is not None and seller_obj.account_age_days is None
     needs_categories = seller_obj is None or seller_obj.category_history_json in ("{}", "", None)
 
-    # Slow path: Playwright for remaining gaps (BTF + _ssn in parallel threads)
+    # Slow path: Playwright for remaining gaps (BTF + _ssn in parallel threads).
+    # Each thread creates its own Store — sqlite3 connections are not thread-safe.
     if needs_btf or needs_categories:
-        scraper = ScrapedEbayAdapter(Store(_DB_PATH))
         errors: list[Exception] = []
 
         def _btf():
             try:
-                scraper.enrich_sellers_btf({seller: listing_id}, max_workers=1)
+                ScrapedEbayAdapter(Store(shared_db)).enrich_sellers_btf(
+                    {seller: listing_id}, max_workers=1
+                )
             except Exception as e:
                 errors.append(e)
 
         def _ssn():
             try:
-                ScrapedEbayAdapter(Store(_DB_PATH)).enrich_sellers_categories([seller], max_workers=1)
+                ScrapedEbayAdapter(Store(shared_db)).enrich_sellers_categories(
+                    [seller], max_workers=1
+                )
             except Exception as e:
                 errors.append(e)
 
@@ -347,16 +397,16 @@ def enrich_seller(seller: str, listing_id: str, query: str = ""):
             log.warning("enrich_seller: %d scrape error(s): %s", len(errors), errors[0])
 
     # Re-fetch listing with staging fields, re-score
-    staged = store.get_listings_staged("ebay", [listing_id])
+    staged = user_store.get_listings_staged("ebay", [listing_id])
     listing = staged.get(listing_id)
     if not listing:
         raise HTTPException(status_code=404, detail=f"Listing '{listing_id}' not found")
 
-    scorer = TrustScorer(store)
+    scorer = TrustScorer(shared_store)
     trust_list = scorer.score_batch([listing], query or listing.title)
     trust = trust_list[0] if trust_list else None
 
-    seller_final = store.get_seller("ebay", seller)
+    seller_final = shared_store.get_seller("ebay", seller)
     return {
         "trust_score": dataclasses.asdict(trust) if trust else None,
         "seller": dataclasses.asdict(seller_final) if seller_final else None,
@@ -372,24 +422,39 @@ class SavedSearchCreate(BaseModel):
 
 
 @app.get("/api/saved-searches")
-def list_saved_searches():
-    return {"saved_searches": [dataclasses.asdict(s) for s in Store(_DB_PATH).list_saved_searches()]}
+def list_saved_searches(session: CloudUser = Depends(get_session)):
+    user_store = Store(session.user_db)
+    return {"saved_searches": [dataclasses.asdict(s) for s in user_store.list_saved_searches()]}
 
 
 @app.post("/api/saved-searches", status_code=201)
-def create_saved_search(body: SavedSearchCreate):
-    created = Store(_DB_PATH).save_saved_search(
+def create_saved_search(
+    body: SavedSearchCreate,
+    session: CloudUser = Depends(get_session),
+):
+    user_store = Store(session.user_db)
+    features = compute_features(session.tier)
+
+    if features.saved_searches_limit is not None:
+        existing = user_store.list_saved_searches()
+        if len(existing) >= features.saved_searches_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free tier allows up to {features.saved_searches_limit} saved searches. Upgrade to save more.",
+            )
+
+    created = user_store.save_saved_search(
         SavedSearchModel(name=body.name, query=body.query, platform="ebay", filters_json=body.filters_json)
     )
     return dataclasses.asdict(created)
 
 
 @app.delete("/api/saved-searches/{saved_id}", status_code=204)
-def delete_saved_search(saved_id: int):
-    Store(_DB_PATH).delete_saved_search(saved_id)
+def delete_saved_search(saved_id: int, session: CloudUser = Depends(get_session)):
+    Store(session.user_db).delete_saved_search(saved_id)
 
 
 @app.patch("/api/saved-searches/{saved_id}/run")
-def mark_saved_search_run(saved_id: int):
-    Store(_DB_PATH).update_saved_search_last_run(saved_id)
+def mark_saved_search_run(saved_id: int, session: CloudUser = Depends(get_session)):
+    Store(session.user_db).update_saved_search_last_run(saved_id)
     return {"ok": True}

@@ -10,8 +10,8 @@ import math
 class TrustScorer:
     """Orchestrates metadata + photo scoring for a batch of listings."""
 
-    def __init__(self, store: Store):
-        self._store = store
+    def __init__(self, shared_store: Store):
+        self._store = shared_store
         self._meta = MetadataScorer()
         self._photo = PhotoScorer()
         self._agg = Aggregator()

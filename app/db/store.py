@@ -59,13 +59,24 @@ class Store:
             return None
         return Seller(*row[:7], id=row[7], fetched_at=row[8])
 
-    def refresh_seller_categories(self, platform: str, seller_ids: list[str]) -> int:
+    def refresh_seller_categories(
+        self,
+        platform: str,
+        seller_ids: list[str],
+        listing_store: "Optional[Store]" = None,
+    ) -> int:
         """Derive category_history_json for sellers that lack it by aggregating
         their stored listings' category_name values.
+
+        listing_store: the Store instance that holds listings (may differ from
+        self in cloud split-DB mode where sellers live in shared.db and listings
+        live in user.db). Defaults to self when not provided (local mode).
 
         Returns the count of sellers updated.
         """
         from app.platforms.ebay.scraper import _classify_category_label  # lazy to avoid circular
+
+        src = listing_store if listing_store is not None else self
 
         if not seller_ids:
             return 0
@@ -74,7 +85,7 @@ class Store:
             seller = self.get_seller(platform, sid)
             if not seller or seller.category_history_json not in ("{}", "", None):
                 continue  # already enriched
-            rows = self._conn.execute(
+            rows = src._conn.execute(
                 "SELECT category_name, COUNT(*) FROM listings "
                 "WHERE platform=? AND seller_platform_id=? AND category_name IS NOT NULL "
                 "GROUP BY category_name",
