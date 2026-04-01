@@ -7,15 +7,18 @@ from typing import Optional
 
 from circuitforge_core.db import get_connection, run_migrations
 
-from .models import Listing, Seller, TrustScore, MarketComp, SavedSearch
+from .models import Listing, Seller, TrustScore, MarketComp, SavedSearch, ScammerEntry
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
 class Store:
     def __init__(self, db_path: Path):
+        self._db_path = db_path
         self._conn = get_connection(db_path)
         run_migrations(self._conn, MIGRATIONS_DIR)
+        # WAL mode: allows concurrent readers + one writer without blocking
+        self._conn.execute("PRAGMA journal_mode=WAL")
 
     # --- Seller ---
 
@@ -35,11 +38,26 @@ class Store:
         self.save_sellers([seller])
 
     def save_sellers(self, sellers: list[Seller]) -> None:
+        # COALESCE preserves enriched signals (account_age_days, category_history_json)
+        # that were filled by BTF / _ssn passes — never overwrite with NULL from a
+        # fresh search page that doesn't carry those signals.
         self._conn.executemany(
-            "INSERT OR REPLACE INTO sellers "
+            "INSERT INTO sellers "
             "(platform, platform_seller_id, username, account_age_days, "
             "feedback_count, feedback_ratio, category_history_json) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(platform, platform_seller_id) DO UPDATE SET "
+            "  username             = excluded.username, "
+            "  feedback_count       = excluded.feedback_count, "
+            "  feedback_ratio       = excluded.feedback_ratio, "
+            "  account_age_days     = COALESCE(excluded.account_age_days, sellers.account_age_days), "
+            "  category_history_json = COALESCE("
+            "    CASE WHEN excluded.category_history_json IN ('{}', '', NULL) THEN NULL "
+            "         ELSE excluded.category_history_json END, "
+            "    CASE WHEN sellers.category_history_json IN ('{}', '', NULL) THEN NULL "
+            "         ELSE sellers.category_history_json END, "
+            "    '{}'"
+            "  )",
             [
                 (s.platform, s.platform_seller_id, s.username, s.account_age_days,
                  s.feedback_count, s.feedback_ratio, s.category_history_json)
@@ -224,6 +242,43 @@ class Store:
             price_at_first_seen=row[17],
         )
 
+    # --- TrustScore ---
+
+    def save_trust_scores(self, scores: list[TrustScore]) -> None:
+        """Upsert trust scores keyed by listing_id.
+
+        photo_analysis_json is preserved on conflict so background vision
+        results written by the task runner are never overwritten by a re-score.
+        Requires idx_trust_scores_listing UNIQUE index (migration 007).
+        """
+        self._conn.executemany(
+            "INSERT INTO trust_scores "
+            "(listing_id, composite_score, account_age_score, feedback_count_score, "
+            "feedback_ratio_score, price_vs_market_score, category_history_score, "
+            "photo_hash_duplicate, red_flags_json, score_is_partial) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(listing_id) DO UPDATE SET "
+            "  composite_score       = excluded.composite_score, "
+            "  account_age_score     = excluded.account_age_score, "
+            "  feedback_count_score  = excluded.feedback_count_score, "
+            "  feedback_ratio_score  = excluded.feedback_ratio_score, "
+            "  price_vs_market_score = excluded.price_vs_market_score, "
+            "  category_history_score= excluded.category_history_score, "
+            "  photo_hash_duplicate  = excluded.photo_hash_duplicate, "
+            "  red_flags_json        = excluded.red_flags_json, "
+            "  score_is_partial      = excluded.score_is_partial, "
+            "  scored_at             = CURRENT_TIMESTAMP",
+            # photo_analysis_json intentionally omitted — runner owns that column
+            [
+                (s.listing_id, s.composite_score, s.account_age_score,
+                 s.feedback_count_score, s.feedback_ratio_score,
+                 s.price_vs_market_score, s.category_history_score,
+                 int(s.photo_hash_duplicate), s.red_flags_json, int(s.score_is_partial))
+                for s in scores if s.listing_id
+            ],
+        )
+        self._conn.commit()
+
     # --- MarketComp ---
 
     def save_market_comp(self, comp: MarketComp) -> None:
@@ -273,6 +328,58 @@ class Store:
             (datetime.now(timezone.utc).isoformat(), saved_id),
         )
         self._conn.commit()
+
+    # --- ScammerBlocklist ---
+
+    def add_to_blocklist(self, entry: ScammerEntry) -> ScammerEntry:
+        """Upsert a seller into the blocklist. Returns the saved entry with id and created_at."""
+        self._conn.execute(
+            "INSERT INTO scammer_blocklist "
+            "(platform, platform_seller_id, username, reason, source) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(platform, platform_seller_id) DO UPDATE SET "
+            "  username = excluded.username, "
+            "  reason   = COALESCE(excluded.reason, scammer_blocklist.reason), "
+            "  source   = excluded.source",
+            (entry.platform, entry.platform_seller_id, entry.username,
+             entry.reason, entry.source),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT id, created_at FROM scammer_blocklist "
+            "WHERE platform=? AND platform_seller_id=?",
+            (entry.platform, entry.platform_seller_id),
+        ).fetchone()
+        from dataclasses import replace
+        return replace(entry, id=row[0], created_at=row[1])
+
+    def remove_from_blocklist(self, platform: str, platform_seller_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM scammer_blocklist WHERE platform=? AND platform_seller_id=?",
+            (platform, platform_seller_id),
+        )
+        self._conn.commit()
+
+    def is_blocklisted(self, platform: str, platform_seller_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM scammer_blocklist WHERE platform=? AND platform_seller_id=? LIMIT 1",
+            (platform, platform_seller_id),
+        ).fetchone()
+        return row is not None
+
+    def list_blocklist(self, platform: str = "ebay") -> list[ScammerEntry]:
+        rows = self._conn.execute(
+            "SELECT platform, platform_seller_id, username, reason, source, id, created_at "
+            "FROM scammer_blocklist WHERE platform=? ORDER BY created_at DESC",
+            (platform,),
+        ).fetchall()
+        return [
+            ScammerEntry(
+                platform=r[0], platform_seller_id=r[1], username=r[2],
+                reason=r[3], source=r[4], id=r[5], created_at=r[6],
+            )
+            for r in rows
+        ]
 
     def get_market_comp(self, platform: str, query_hash: str) -> Optional[MarketComp]:
         row = self._conn.execute(

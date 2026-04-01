@@ -16,11 +16,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import sqlite3
 from pathlib import Path
 
 import requests
 
+from circuitforge_core.db import get_connection
 from circuitforge_core.llm import LLMRouter
 
 log = logging.getLogger(__name__)
@@ -50,31 +50,35 @@ def insert_task(
     *,
     params: str | None = None,
 ) -> tuple[int, bool]:
-    """Insert a background task if no identical task is already in-flight."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    existing = conn.execute(
-        "SELECT id FROM background_tasks "
-        "WHERE task_type=? AND job_id=? AND status IN ('queued','running')",
-        (task_type, job_id),
-    ).fetchone()
-    if existing:
+    """Insert a background task if no identical task is already in-flight.
+
+    Uses get_connection() so WAL mode and timeout=30 apply — same as all other
+    Snipe DB access.  Returns (task_id, is_new).
+    """
+    conn = get_connection(db_path)
+    conn.row_factory = __import__("sqlite3").Row
+    try:
+        existing = conn.execute(
+            "SELECT id FROM background_tasks "
+            "WHERE task_type=? AND job_id=? AND status IN ('queued','running')",
+            (task_type, job_id),
+        ).fetchone()
+        if existing:
+            return existing["id"], False
+        cursor = conn.execute(
+            "INSERT INTO background_tasks (task_type, job_id, params) VALUES (?,?,?)",
+            (task_type, job_id, params),
+        )
+        conn.commit()
+        return cursor.lastrowid, True
+    finally:
         conn.close()
-        return existing["id"], False
-    cursor = conn.execute(
-        "INSERT INTO background_tasks (task_type, job_id, params) VALUES (?,?,?)",
-        (task_type, job_id, params),
-    )
-    conn.commit()
-    task_id = cursor.lastrowid
-    conn.close()
-    return task_id, True
 
 
 def _update_task_status(
     db_path: Path, task_id: int, status: str, *, error: str = ""
 ) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE background_tasks "
             "SET status=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -107,10 +111,18 @@ def _run_trust_photo_analysis(
     listing_id: int,
     params: str | None,
 ) -> None:
-    """Download primary listing photo, run vision LLM, write to trust_scores."""
+    """Download primary listing photo, run vision LLM, write to trust_scores.
+
+    In cloud mode the result must be written to the per-user DB, which differs
+    from db_path (the scheduler's shared task-queue DB).  The enqueue call site
+    encodes the correct write target as 'user_db' in params; in local mode it
+    falls back to db_path so the single-DB layout keeps working.
+    """
     p = json.loads(params or "{}")
     photo_url = p.get("photo_url", "")
     listing_title = p.get("listing_title", "")
+    # user_db: per-user DB in cloud mode; same as db_path in local mode.
+    result_db = Path(p.get("user_db", str(db_path)))
 
     if not photo_url:
         raise ValueError("trust_photo_analysis: 'photo_url' is required in params")
@@ -144,7 +156,7 @@ def _run_trust_photo_analysis(
         )
         analysis = {"raw_response": raw, "parse_error": True}
 
-    with sqlite3.connect(db_path) as conn:
+    with get_connection(result_db) as conn:
         conn.execute(
             "UPDATE trust_scores SET photo_analysis_json=? WHERE listing_id=?",
             (json.dumps(analysis), listing_id),

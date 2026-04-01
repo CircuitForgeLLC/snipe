@@ -34,15 +34,16 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # Start vision/LLM background task scheduler
-    from app.tasks.scheduler import get_scheduler
-    from api.cloud_session import _LOCAL_SNIPE_DB
-    get_scheduler(_LOCAL_SNIPE_DB)
-    log.info("Snipe task scheduler started (db=%s)", _LOCAL_SNIPE_DB)
+    # Start vision/LLM background task scheduler.
+    # background_tasks queue lives in shared_db (cloud) or local_db (local)
+    # so the scheduler has a single stable DB path across all cloud users.
+    from app.tasks.scheduler import get_scheduler, reset_scheduler
+    from api.cloud_session import CLOUD_MODE, _LOCAL_SNIPE_DB, _shared_db_path
+    sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
+    get_scheduler(sched_db)
+    log.info("Snipe task scheduler started (db=%s)", sched_db)
     yield
-    # Graceful shutdown
-    from app.tasks.scheduler import reset_scheduler
-    get_scheduler(_LOCAL_SNIPE_DB).shutdown(timeout=10.0)
+    get_scheduler(sched_db).shutdown(timeout=10.0)
     reset_scheduler()
     log.info("Snipe task scheduler stopped.")
 
@@ -162,6 +163,55 @@ def _trigger_scraper_enrichment(
     import threading
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+
+
+def _enqueue_vision_tasks(
+    listings: list,
+    trust_scores_list: list,
+    session: "CloudUser",
+) -> None:
+    """Enqueue trust_photo_analysis tasks for listings with photos.
+
+    Runs fire-and-forget: tasks land in the scheduler queue and the response
+    returns immediately.  Results are written back to trust_scores.photo_analysis_json
+    by the runner when the vision LLM completes.
+
+    session.shared_db: where background_tasks lives (scheduler's DB).
+    session.user_db:   encoded in params so the runner writes to the right
+                       trust_scores table in cloud mode.
+    """
+    import json as _json
+    from app.tasks.runner import insert_task
+    from app.tasks.scheduler import get_scheduler
+    from api.cloud_session import CLOUD_MODE, _shared_db_path, _LOCAL_SNIPE_DB
+
+    sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
+    sched = get_scheduler(sched_db)
+
+    enqueued = 0
+    for listing, ts in zip(listings, trust_scores_list):
+        if not listing.photo_urls or not listing.id:
+            continue
+        params = _json.dumps({
+            "photo_url": listing.photo_urls[0],
+            "listing_title": listing.title,
+            "user_db": str(session.user_db),
+        })
+        task_id, is_new = insert_task(
+            sched_db, "trust_photo_analysis", job_id=listing.id, params=params
+        )
+        if is_new:
+            ok = sched.enqueue(task_id, "trust_photo_analysis", listing.id, params)
+            if not ok:
+                log.warning(
+                    "Vision task queue full — dropped task for listing %s",
+                    listing.platform_listing_id,
+                )
+            else:
+                enqueued += 1
+
+    if enqueued:
+        log.info("Enqueued %d vision analysis task(s)", enqueued)
 
 
 def _parse_terms(raw: str) -> list[str]:
@@ -311,6 +361,14 @@ def search(
 
     scorer = TrustScorer(shared_store)
     trust_scores_list = scorer.score_batch(listings, q)
+
+    # Persist trust scores so background vision tasks have a row to UPDATE.
+    user_store.save_trust_scores(trust_scores_list)
+
+    # Enqueue vision analysis for listings with photos — Paid tier and above.
+    features = compute_features(session.tier)
+    if features.photo_analysis:
+        _enqueue_vision_tasks(listings, trust_scores_list, session)
 
     query_hash = hashlib.md5(q.encode()).hexdigest()
     comp = shared_store.get_market_comp("ebay", query_hash)

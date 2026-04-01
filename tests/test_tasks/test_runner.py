@@ -28,6 +28,7 @@ def tmp_db(tmp_path: Path) -> Path:
             status     TEXT    NOT NULL DEFAULT 'queued',
             params     TEXT,
             error      TEXT,
+            stage      TEXT,
             created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
