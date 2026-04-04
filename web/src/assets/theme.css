@@ -4,7 +4,10 @@
    Snipe Mode easter egg: activated by Konami code (cf-snipe-mode in localStorage).
 */
 
-/* ── Snipe — dark tactical (default — always dark) ─ */
+/* ── Snipe — dark tactical (default) ───────────────
+   Light variant is defined below via prefers-color-scheme.
+   Snipe Mode easter egg always overrides both.
+*/
 :root {
   /* Brand — amber target reticle */
   --app-primary: #f59e0b;
@@ -69,6 +72,49 @@
 
   /* Layout */
   --sidebar-width: 220px;
+}
+
+/* ── Light mode — field notebook / tactical map ─────
+   Warm cream surfaces with the same amber accent.
+   Snipe Mode data attribute overrides this via higher specificity.
+*/
+@media (prefers-color-scheme: light) {
+  :root:not([data-snipe-mode="active"]) {
+    /* Surfaces — warm cream, like a tactical field notebook */
+    --color-surface:        #f8f5ee;
+    --color-surface-2:      #f0ece3;
+    --color-surface-raised: #e8e3d8;
+
+    /* Borders — warm khaki */
+    --color-border:       #c8bfae;
+    --color-border-light: #dbd3c4;
+
+    /* Text — warm near-black ink */
+    --color-text:         #1c1a16;
+    --color-text-muted:   #6b6357;
+    --color-text-inverse: #f8f5ee;
+
+    /* Brand — amber stays identical (works great on light too) */
+    --app-primary:       #d97706;   /* slightly deeper for contrast on light */
+    --app-primary-hover: #b45309;
+    --app-primary-light: rgba(217, 119, 6, 0.12);
+
+    /* Trust signals — same hues, adjusted for legibility on cream */
+    --trust-high: #16a34a;
+    --trust-mid:  #b45309;
+    --trust-low:  #dc2626;
+
+    /* Semantic */
+    --color-success: #16a34a;
+    --color-error:   #dc2626;
+    --color-warning: #b45309;
+    --color-info:    #2563eb;
+
+    /* Shadows — lighter, warm tint */
+    --shadow-sm: 0 1px 3px rgba(60, 45, 20, 0.12), 0 1px 2px rgba(60, 45, 20, 0.08);
+    --shadow-md: 0 4px 12px rgba(60, 45, 20, 0.15), 0 2px 4px rgba(60, 45, 20, 0.1);
+    --shadow-lg: 0 10px 30px rgba(60, 45, 20, 0.2), 0 4px 8px rgba(60, 45, 20, 0.1);
+  }
 }
 
 /* ── Snipe Mode easter egg theme ─────────────────── */

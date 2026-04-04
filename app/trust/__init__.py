@@ -41,6 +41,7 @@ class TrustScorer:
         scores = []
         for listing, is_dup in zip(listings, duplicates):
             seller = self._store.get_seller("ebay", listing.seller_platform_id)
+            blocklisted = self._store.is_blocklisted("ebay", listing.seller_platform_id)
             if seller:
                 signal_scores = self._meta.score(seller, market_median, listing.price, price_cv)
             else:
@@ -55,6 +56,7 @@ class TrustScorer:
                 first_seen_at=listing.first_seen_at,
                 price=listing.price,
                 price_at_first_seen=listing.price_at_first_seen,
+                is_blocklisted=blocklisted,
             )
             scores.append(trust)
         return scores

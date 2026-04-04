@@ -66,20 +66,23 @@ import {
   MagnifyingGlassIcon,
   BookmarkIcon,
   Cog6ToothIcon,
+  ShieldExclamationIcon,
 } from '@heroicons/vue/24/outline'
 import { useSnipeMode } from '../composables/useSnipeMode'
 
 const { active: isSnipeMode, deactivate } = useSnipeMode()
 
 const navLinks = computed(() => [
-  { to: '/',      icon: MagnifyingGlassIcon, label: 'Search' },
-  { to: '/saved', icon: BookmarkIcon,        label: 'Saved' },
+  { to: '/',          icon: MagnifyingGlassIcon,    label: 'Search' },
+  { to: '/saved',     icon: BookmarkIcon,            label: 'Saved' },
+  { to: '/blocklist', icon: ShieldExclamationIcon,   label: 'Blocklist' },
 ])
 
 const mobileLinks = [
-  { to: '/',      icon: MagnifyingGlassIcon, label: 'Search' },
-  { to: '/saved', icon: BookmarkIcon,        label: 'Saved' },
-  { to: '/settings', icon: Cog6ToothIcon,   label: 'Settings' },
+  { to: '/',          icon: MagnifyingGlassIcon,    label: 'Search' },
+  { to: '/saved',     icon: BookmarkIcon,            label: 'Saved' },
+  { to: '/blocklist', icon: ShieldExclamationIcon,   label: 'Block' },
+  { to: '/settings',  icon: Cog6ToothIcon,           label: 'Settings' },
 ]
 </script>
 

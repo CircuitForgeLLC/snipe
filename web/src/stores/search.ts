@@ -83,15 +83,43 @@ export interface SearchFilters {
   adapter?: 'auto' | 'api' | 'scraper'  // override adapter selection
 }
 
+// ── Session cache ─────────────────────────────────────────────────────────────
+
+const CACHE_KEY = 'snipe:search-cache'
+
+function saveCache(data: {
+  query: string
+  results: Listing[]
+  trustScores: Record<string, TrustScore>
+  sellers: Record<string, Seller>
+  marketPrice: number | null
+  adapterUsed: 'api' | 'scraper' | null
+}) {
+  try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(data)) } catch { /* quota */ }
+}
+
+function loadCache() {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 export const useSearchStore = defineStore('search', () => {
-  const query = ref('')
-  const results = ref<Listing[]>([])
-  const trustScores = ref<Map<string, TrustScore>>(new Map())   // key: platform_listing_id
-  const sellers = ref<Map<string, Seller>>(new Map())           // key: platform_seller_id
-  const marketPrice = ref<number | null>(null)
-  const adapterUsed = ref<'api' | 'scraper' | null>(null)
+  const cached = loadCache()
+
+  const query = ref<string>(cached?.query ?? '')
+  const results = ref<Listing[]>(cached?.results ?? [])
+  const trustScores = ref<Map<string, TrustScore>>(
+    cached ? new Map(Object.entries(cached.trustScores ?? {})) : new Map()
+  )
+  const sellers = ref<Map<string, Seller>>(
+    cached ? new Map(Object.entries(cached.sellers ?? {})) : new Map()
+  )
+  const marketPrice = ref<number | null>(cached?.marketPrice ?? null)
+  const adapterUsed = ref<'api' | 'scraper' | null>(cached?.adapterUsed ?? null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -143,6 +171,14 @@ export const useSearchStore = defineStore('search', () => {
       sellers.value = new Map(Object.entries(data.sellers ?? {}))
       marketPrice.value = data.market_price ?? null
       adapterUsed.value = data.adapter_used ?? null
+      saveCache({
+        query: q,
+        results: results.value,
+        trustScores: data.trust_scores ?? {},
+        sellers: data.sellers ?? {},
+        marketPrice: marketPrice.value,
+        adapterUsed: adapterUsed.value,
+      })
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         // User cancelled — clear loading but don't surface as an error

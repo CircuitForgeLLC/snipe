@@ -6,15 +6,19 @@ import hashlib
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+import csv
+import io
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from circuitforge_core.config import load_env
 from app.db.store import Store
-from app.db.models import SavedSearch as SavedSearchModel
+from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
 from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.platforms.ebay.adapter import EbayAdapter
@@ -26,6 +30,22 @@ from api.ebay_webhook import router as ebay_webhook_router
 
 load_env(Path(".env"))
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Start vision/LLM background task scheduler.
+    # background_tasks queue lives in shared_db (cloud) or local_db (local)
+    # so the scheduler has a single stable DB path across all cloud users.
+    from app.tasks.scheduler import get_scheduler, reset_scheduler
+    from api.cloud_session import CLOUD_MODE, _LOCAL_SNIPE_DB, _shared_db_path
+    sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
+    get_scheduler(sched_db)
+    log.info("Snipe task scheduler started (db=%s)", sched_db)
+    yield
+    get_scheduler(sched_db).shutdown(timeout=10.0)
+    reset_scheduler()
+    log.info("Snipe task scheduler stopped.")
 
 
 def _ebay_creds() -> tuple[str, str, str]:
@@ -43,7 +63,7 @@ def _ebay_creds() -> tuple[str, str, str]:
         client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
     return client_id, client_secret, env
 
-app = FastAPI(title="Snipe API", version="0.1.0")
+app = FastAPI(title="Snipe API", version="0.1.0", lifespan=_lifespan)
 app.include_router(ebay_webhook_router)
 
 app.add_middleware(
@@ -111,7 +131,7 @@ def _trigger_scraper_enrichment(
         seller = shared_store.get_seller("ebay", sid)
         if not seller:
             continue
-        if (seller.account_age_days is None
+        if ((seller.account_age_days is None or seller.feedback_count == 0)
                 and sid not in needs_btf
                 and len(needs_btf) < _BTF_MAX_PER_SEARCH):
             needs_btf[sid] = listing.platform_listing_id
@@ -143,6 +163,55 @@ def _trigger_scraper_enrichment(
     import threading
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+
+
+def _enqueue_vision_tasks(
+    listings: list,
+    trust_scores_list: list,
+    session: "CloudUser",
+) -> None:
+    """Enqueue trust_photo_analysis tasks for listings with photos.
+
+    Runs fire-and-forget: tasks land in the scheduler queue and the response
+    returns immediately.  Results are written back to trust_scores.photo_analysis_json
+    by the runner when the vision LLM completes.
+
+    session.shared_db: where background_tasks lives (scheduler's DB).
+    session.user_db:   encoded in params so the runner writes to the right
+                       trust_scores table in cloud mode.
+    """
+    import json as _json
+    from app.tasks.runner import insert_task
+    from app.tasks.scheduler import get_scheduler
+    from api.cloud_session import CLOUD_MODE, _shared_db_path, _LOCAL_SNIPE_DB
+
+    sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
+    sched = get_scheduler(sched_db)
+
+    enqueued = 0
+    for listing, ts in zip(listings, trust_scores_list):
+        if not listing.photo_urls or not listing.id:
+            continue
+        params = _json.dumps({
+            "photo_url": listing.photo_urls[0],
+            "listing_title": listing.title,
+            "user_db": str(session.user_db),
+        })
+        task_id, is_new = insert_task(
+            sched_db, "trust_photo_analysis", job_id=listing.id, params=params
+        )
+        if is_new:
+            ok = sched.enqueue(task_id, "trust_photo_analysis", listing.id, params)
+            if not ok:
+                log.warning(
+                    "Vision task queue full — dropped task for listing %s",
+                    listing.platform_listing_id,
+                )
+            else:
+                enqueued += 1
+
+    if enqueued:
+        log.info("Enqueued %d vision analysis task(s)", enqueued)
 
 
 def _parse_terms(raw: str) -> list[str]:
@@ -293,6 +362,14 @@ def search(
     scorer = TrustScorer(shared_store)
     trust_scores_list = scorer.score_batch(listings, q)
 
+    # Persist trust scores so background vision tasks have a row to UPDATE.
+    user_store.save_trust_scores(trust_scores_list)
+
+    # Enqueue vision analysis for listings with photos — Paid tier and above.
+    features = compute_features(session.tier)
+    if features.photo_analysis:
+        _enqueue_vision_tasks(listings, trust_scores_list, session)
+
     query_hash = hashlib.md5(q.encode()).hexdigest()
     comp = shared_store.get_market_comp("ebay", query_hash)
     market_price = comp.median_price if comp else None
@@ -359,7 +436,9 @@ def enrich_seller(
         pass  # no API creds — fall through to BTF
 
     seller_obj = shared_store.get_seller("ebay", seller)
-    needs_btf = seller_obj is not None and seller_obj.account_age_days is None
+    needs_btf = seller_obj is not None and (
+        seller_obj.account_age_days is None or seller_obj.feedback_count == 0
+    )
     needs_categories = seller_obj is None or seller_obj.category_history_json in ("{}", "", None)
 
     # Slow path: Playwright for remaining gaps (BTF + _ssn in parallel threads).
@@ -458,3 +537,95 @@ def delete_saved_search(saved_id: int, session: CloudUser = Depends(get_session)
 def mark_saved_search_run(saved_id: int, session: CloudUser = Depends(get_session)):
     Store(session.user_db).update_saved_search_last_run(saved_id)
     return {"ok": True}
+
+
+# ── Scammer Blocklist ─────────────────────────────────────────────────────────
+# Blocklist lives in shared_db: all users on a shared cloud instance see the
+# same community blocklist. In local (single-user) mode shared_db == user_db.
+
+class BlocklistAdd(BaseModel):
+    platform: str = "ebay"
+    platform_seller_id: str
+    username: str
+    reason: str = ""
+
+
+@app.get("/api/blocklist")
+def list_blocklist(session: CloudUser = Depends(get_session)):
+    store = Store(session.shared_db)
+    return {"entries": [dataclasses.asdict(e) for e in store.list_blocklist()]}
+
+
+@app.post("/api/blocklist", status_code=201)
+def add_to_blocklist(body: BlocklistAdd, session: CloudUser = Depends(get_session)):
+    store = Store(session.shared_db)
+    entry = store.add_to_blocklist(ScammerEntry(
+        platform=body.platform,
+        platform_seller_id=body.platform_seller_id,
+        username=body.username,
+        reason=body.reason or None,
+        source="manual",
+    ))
+    return dataclasses.asdict(entry)
+
+
+@app.delete("/api/blocklist/{platform_seller_id}", status_code=204)
+def remove_from_blocklist(platform_seller_id: str, session: CloudUser = Depends(get_session)):
+    Store(session.shared_db).remove_from_blocklist("ebay", platform_seller_id)
+
+
+@app.get("/api/blocklist/export")
+def export_blocklist(session: CloudUser = Depends(get_session)):
+    """Download the blocklist as a CSV file."""
+    entries = Store(session.shared_db).list_blocklist()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["platform", "platform_seller_id", "username", "reason", "source", "created_at"])
+    for e in entries:
+        writer.writerow([e.platform, e.platform_seller_id, e.username,
+                         e.reason or "", e.source, e.created_at or ""])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=snipe-blocklist.csv"},
+    )
+
+
+@app.post("/api/blocklist/import", status_code=201)
+async def import_blocklist(
+    file: UploadFile = File(...),
+    session: CloudUser = Depends(get_session),
+):
+    """Import a CSV blocklist. Columns: platform_seller_id, username, reason (optional)."""
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")  # handle BOM from Excel exports
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
+
+    store = Store(session.shared_db)
+    imported = 0
+    errors: list[str] = []
+    reader = csv.DictReader(io.StringIO(text))
+
+    # Accept both full-export format (has 'platform' col) and simple format (no 'platform' col).
+    for i, row in enumerate(reader, start=2):
+        seller_id = (row.get("platform_seller_id") or "").strip()
+        username = (row.get("username") or "").strip()
+        if not seller_id or not username:
+            errors.append(f"Row {i}: missing platform_seller_id or username — skipped")
+            continue
+        platform = (row.get("platform") or "ebay").strip()
+        reason = (row.get("reason") or "").strip() or None
+        store.add_to_blocklist(ScammerEntry(
+            platform=platform,
+            platform_seller_id=seller_id,
+            username=username,
+            reason=reason,
+            source="csv_import",
+        ))
+        imported += 1
+
+    log.info("Blocklist import: %d added, %d errors", imported, len(errors))
+    return {"imported": imported, "errors": errors}

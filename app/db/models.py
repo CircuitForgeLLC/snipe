@@ -83,6 +83,18 @@ class SavedSearch:
 
 
 @dataclass
+class ScammerEntry:
+    """A seller manually or community-flagged as a known scammer."""
+    platform: str
+    platform_seller_id: str
+    username: str
+    reason: Optional[str] = None
+    source: str = "manual"          # "manual" | "csv_import" | "community"
+    id: Optional[int] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
 class PhotoHash:
     """Perceptual hash store for cross-search dedup (v0.2+). Schema scaffolded in v0.1."""
     listing_id: int

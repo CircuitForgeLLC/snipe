@@ -70,7 +70,7 @@ function formatDate(iso: string | null): string {
 
 async function onRun(item: SavedSearch) {
   store.markRun(item.id)
-  const query: Record<string, string> = { q: item.query }
+  const query: Record<string, string> = { q: item.query, autorun: '1' }
   if (item.filters_json && item.filters_json !== '{}') query.filters = item.filters_json
   router.push({ path: '/', query })
 }

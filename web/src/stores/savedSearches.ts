@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { SavedSearch, SearchFilters } from './search'
+import { apiFetch } from '../utils/api'
 
 export type { SavedSearch }
 
@@ -15,7 +16,7 @@ export const useSavedSearchesStore = defineStore('savedSearches', () => {
     loading.value = true
     error.value = null
     try {
-      const res = await fetch(`${apiBase}/api/saved-searches`)
+      const res = await apiFetch(`${apiBase}/api/saved-searches`)
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       const data = await res.json() as { saved_searches: SavedSearch[] }
       items.value = data.saved_searches
@@ -29,7 +30,7 @@ export const useSavedSearchesStore = defineStore('savedSearches', () => {
   async function create(name: string, query: string, filters: SearchFilters): Promise<SavedSearch> {
     // Strip per-run fields before persisting
     const { pages: _pages, ...persistable } = filters
-    const res = await fetch(`${apiBase}/api/saved-searches`, {
+    const res = await apiFetch(`${apiBase}/api/saved-searches`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, query, filters_json: JSON.stringify(persistable) }),
