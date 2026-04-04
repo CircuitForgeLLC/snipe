@@ -18,6 +18,7 @@ def test_byok_does_not_unlock_photo_analysis():
     assert can_use("photo_analysis", tier="free", has_byok=True) is False
 
 
-def test_saved_searches_require_paid():
-    assert can_use("saved_searches", tier="free") is False
+def test_saved_searches_are_free():
+    # Ungated: retention feature — friction cost outweighs gate value (see tiers.py)
+    assert can_use("saved_searches", tier="free") is True
     assert can_use("saved_searches", tier="paid") is True
