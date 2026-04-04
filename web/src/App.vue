@@ -8,23 +8,28 @@
       <a href="#main-content" class="skip-link">Skip to main content</a>
       <RouterView />
     </main>
+
+    <!-- Feedback FAB — hidden when FORGEJO_API_TOKEN not configured -->
+    <FeedbackButton :current-view="String(route.name ?? 'unknown')" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { RouterView } from 'vue-router'
+import { RouterView, useRoute } from 'vue-router'
 import { useMotion } from './composables/useMotion'
 import { useSnipeMode } from './composables/useSnipeMode'
 import { useKonamiCode } from './composables/useKonamiCode'
 import { useSessionStore } from './stores/session'
 import { useBlocklistStore } from './stores/blocklist'
 import AppNav from './components/AppNav.vue'
+import FeedbackButton from './components/FeedbackButton.vue'
 
 const motion = useMotion()
 const { activate, restore } = useSnipeMode()
 const session = useSessionStore()
 const blocklistStore = useBlocklistStore()
+const route = useRoute()
 
 useKonamiCode(activate)
 
