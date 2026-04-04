@@ -3,53 +3,57 @@
     <!-- Search bar -->
     <header class="search-header">
       <form class="search-form" @submit.prevent="onSearch" role="search">
-        <label for="cat-select" class="sr-only">Category</label>
-        <select
-          id="cat-select"
-          v-model="filters.categoryId"
-          class="search-category-select"
-          :class="{ 'search-category-select--active': filters.categoryId }"
-          :disabled="store.loading"
-          title="Filter by category"
-        >
-          <option value="">All</option>
-          <optgroup v-for="group in CATEGORY_GROUPS" :key="group.label" :label="group.label">
-            <option v-for="cat in group.cats" :key="cat.id" :value="cat.id">
-              {{ cat.name }}
-            </option>
-          </optgroup>
-        </select>
-        <label for="search-input" class="sr-only">Search listings</label>
-        <input
-          id="search-input"
-          v-model="queryInput"
-          type="search"
-          class="search-input"
-          placeholder="RTX 4090, vintage camera, rare vinyl…"
-          autocomplete="off"
-          :disabled="store.loading"
-        />
-        <button type="submit" class="search-btn" :disabled="store.loading || !queryInput.trim()">
-          <MagnifyingGlassIcon class="search-btn-icon" aria-hidden="true" />
-          <span>{{ store.loading ? 'Searching…' : 'Search' }}</span>
-        </button>
-        <button
-          v-if="store.loading"
-          type="button"
-          class="cancel-btn"
-          @click="store.cancelSearch()"
-          title="Cancel search"
-        >✕ Cancel</button>
-        <button
-          v-else
-          type="button"
-          class="save-bookmark-btn"
-          :disabled="!queryInput.trim()"
-          :title="showSaveForm ? 'Cancel' : 'Save this search'"
-          @click="showSaveForm = !showSaveForm; if (showSaveForm) saveName = queryInput.trim()"
-        >
-          <BookmarkIcon class="search-btn-icon" aria-hidden="true" />
-        </button>
+        <div class="search-form-row1">
+          <label for="cat-select" class="sr-only">Category</label>
+          <select
+            id="cat-select"
+            v-model="filters.categoryId"
+            class="search-category-select"
+            :class="{ 'search-category-select--active': filters.categoryId }"
+            :disabled="store.loading"
+            title="Filter by category"
+          >
+            <option value="">All</option>
+            <optgroup v-for="group in CATEGORY_GROUPS" :key="group.label" :label="group.label">
+              <option v-for="cat in group.cats" :key="cat.id" :value="cat.id">
+                {{ cat.name }}
+              </option>
+            </optgroup>
+          </select>
+          <label for="search-input" class="sr-only">Search listings</label>
+          <input
+            id="search-input"
+            v-model="queryInput"
+            type="search"
+            class="search-input"
+            placeholder="RTX 4090, vintage camera, rare vinyl…"
+            autocomplete="off"
+            :disabled="store.loading"
+          />
+        </div>
+        <div class="search-form-row2">
+          <button type="submit" class="search-btn" :disabled="store.loading || !queryInput.trim()">
+            <MagnifyingGlassIcon class="search-btn-icon" aria-hidden="true" />
+            <span>{{ store.loading ? 'Searching…' : 'Search' }}</span>
+          </button>
+          <button
+            v-if="store.loading"
+            type="button"
+            class="cancel-btn"
+            @click="store.cancelSearch()"
+            title="Cancel search"
+          >✕ Cancel</button>
+          <button
+            v-else
+            type="button"
+            class="save-bookmark-btn"
+            :disabled="!queryInput.trim()"
+            :title="showSaveForm ? 'Cancel' : 'Save this search'"
+            @click="showSaveForm = !showSaveForm; if (showSaveForm) saveName = queryInput.trim()"
+          >
+            <BookmarkIcon class="search-btn-icon" aria-hidden="true" />
+          </button>
+        </div>
       </form>
       <form v-if="showSaveForm" class="save-inline-form" @submit.prevent="onSave">
         <input
@@ -67,8 +71,25 @@
     </header>
 
     <div class="search-body">
-      <!-- Filter sidebar -->
-      <aside class="filter-sidebar" aria-label="Search filters">
+      <!-- Mobile filter toggle -->
+      <button
+        type="button"
+        class="filter-drawer-toggle"
+        :class="{ 'filter-drawer-toggle--active': showFilters }"
+        aria-controls="filter-sidebar"
+        :aria-expanded="showFilters"
+        @click="showFilters = !showFilters"
+      >
+        ⚙ Filters<span v-if="activeFilterCount > 0" class="filter-badge">{{ activeFilterCount }}</span>
+      </button>
+
+      <!-- Filter sidebar / drawer -->
+      <aside
+        id="filter-sidebar"
+        class="filter-sidebar"
+        :class="{ 'filter-sidebar--open': showFilters }"
+        aria-label="Search filters"
+      >
 
         <!-- ── eBay Search Parameters ─────────────────────────────────────── -->
         <!-- These are sent to eBay. Changes require a new search to take effect. -->
@@ -321,9 +342,27 @@ const queryInput = ref('')
 
 // Save search UI state
 const showSaveForm = ref(false)
+const showFilters = ref(false)
 const saveName = ref('')
 const saveError = ref<string | null>(null)
 const saveSuccess = ref(false)
+
+// Count active non-default filters for the mobile badge
+const activeFilterCount = computed(() => {
+  let n = 0
+  if (filters.categoryId) n++
+  if (filters.minPrice !== null && filters.minPrice > 0) n++
+  if (filters.maxPrice !== null && filters.maxPrice > 0) n++
+  if (filters.minTrust > 0) n++
+  if (filters.hideRedFlags) n++
+  if (filters.hidePartial) n++
+  if (filters.hideLongOnMarket) n++
+  if (filters.hidePriceDrop) n++
+  if (filters.mustInclude) n++
+  if (filters.mustExclude) n++
+  if (filters.pages > 1) n++
+  return n
+})
 
 async function onSave() {
   if (!saveName.value.trim()) return
@@ -344,7 +383,6 @@ onMounted(() => {
   const q = route.query.q
   if (typeof q === 'string' && q.trim()) {
     queryInput.value = q.trim()
-    // Restore saved filters (e.g. category, price range, trust threshold)
     const f = route.query.filters
     if (typeof f === 'string') {
       try {
@@ -352,7 +390,13 @@ onMounted(() => {
         Object.assign(filters, restored)
       } catch { /* malformed — ignore */ }
     }
-    onSearch()
+    if (route.query.autorun === '1') {
+      // Strip the autorun flag from the URL before searching
+      router.replace({ query: { ...route.query, autorun: undefined } })
+      onSearch()
+    }
+    // Otherwise: URL params just restore the form (e.g. on page refresh).
+    // Results are restored from sessionStorage by the search store.
   }
 })
 
@@ -563,6 +607,7 @@ const hiddenCount = computed(() => store.results.length - visibleListings.value.
 
 async function onSearch() {
   if (!queryInput.value.trim()) return
+  showFilters.value = false   // close drawer on mobile when search runs
   await store.search(queryInput.value.trim(), filters)
 }
 </script>
@@ -582,12 +627,6 @@ async function onSearch() {
   position: sticky;
   top: 0;
   z-index: 10;
-}
-
-.search-form {
-  display: flex;
-  gap: var(--space-3);
-  max-width: 760px;
 }
 
 .search-category-select {
@@ -1078,13 +1117,146 @@ async function onSearch() {
   gap: var(--space-3);
 }
 
-/* Mobile: collapse filter sidebar */
+/* ── Search form rows (desktop: single flex row, mobile: two rows) ───── */
+.search-form {
+  display: flex;
+  gap: var(--space-3);
+  max-width: 760px;
+  flex-wrap: wrap;   /* rows fall through naturally on mobile */
+}
+.search-form-row1 {
+  display: flex;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+.search-form-row2 {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* ── Mobile filter drawer toggle (hidden on desktop) ─────────────────── */
+.filter-drawer-toggle {
+  display: none;
+}
+
+.filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: var(--space-1);
+  background: var(--app-primary);
+  color: var(--color-text-inverse);
+  border-radius: var(--radius-full);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ── Responsive breakpoints ──────────────────────────────────────────── */
 @media (max-width: 767px) {
-  .filter-sidebar {
-    display: none;
+  /* Search header: tighter padding on mobile */
+  .search-header {
+    padding: var(--space-3) var(--space-3) var(--space-3);
   }
 
-  .search-header { padding: var(--space-4); }
-  .results-area  { padding: var(--space-4); }
+  /* Form rows: row1 takes full width, row2 stretches buttons */
+  .search-form {
+    gap: var(--space-2);
+  }
+  .search-form-row1 {
+    width: 100%;
+    flex: unset;
+  }
+  .search-form-row2 {
+    width: 100%;
+    flex-shrink: unset;
+  }
+  .search-btn {
+    flex: 1;   /* stretch search button to fill row */
+  }
+
+  /* Category select: don't let it crowd the input */
+  .search-category-select {
+    max-width: 110px;
+    font-size: 0.8125rem;
+  }
+
+  /* Filter drawer toggle: show on mobile */
+  .filter-drawer-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    margin: var(--space-2) var(--space-3);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    font-family: var(--font-body);
+    font-size: 0.875rem;
+    cursor: pointer;
+    width: calc(100% - var(--space-6));
+    transition: border-color 150ms ease, color 150ms ease;
+    align-self: flex-start;
+  }
+  .filter-drawer-toggle--active {
+    border-color: var(--app-primary);
+    color: var(--app-primary);
+  }
+
+  /* Filter sidebar: hidden by default, slides down when open */
+  .filter-sidebar {
+    display: none;
+    width: 100%;
+    max-height: 65dvh;
+    overflow-y: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    padding: var(--space-4) var(--space-4) var(--space-6);
+    background: var(--color-surface-2);
+    animation: drawer-slide-down 180ms ease;
+  }
+  .filter-sidebar--open {
+    display: flex;
+  }
+
+  /* Search body: stack vertically (toggle → sidebar → results) */
+  .search-body {
+    flex-direction: column;
+  }
+
+  /* Results: full-width, slightly tighter padding */
+  .results-area {
+    padding: var(--space-4) var(--space-3);
+    overflow-y: unset;   /* let the page scroll on mobile, not a sub-scroll container */
+  }
+
+  /* Toolbar: wrap if needed */
+  .results-toolbar {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .toolbar-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Save inline form: full width */
+  .save-inline-form {
+    flex-wrap: wrap;
+  }
+  .save-name-input {
+    width: 100%;
+  }
 }
+
+@keyframes drawer-slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 </style>

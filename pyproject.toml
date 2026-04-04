@@ -17,10 +17,12 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "fastapi>=0.111",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.29",
     "playwright>=1.44",
     "playwright-stealth>=1.0",
     "cryptography>=42.0",
+    "PyJWT>=2.8",
 ]
 
 [tool.setuptools.packages.find]

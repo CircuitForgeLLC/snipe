@@ -32,6 +32,9 @@ EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
 EBAY_ITEM_URL   = "https://www.ebay.com/itm/"
 _HTML_CACHE_TTL = 300  # seconds — 5 minutes
 _JOINED_RE = re.compile(r"Joined\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{4})", re.I)
+# Matches "username (1,234) 99.1% positive feedback" on /itm/ listing pages.
+# Capture groups: 1=raw_count ("1,234"), 2=ratio_pct ("99.1").
+_ITEM_FEEDBACK_RE = re.compile(r'\((\d[\d,]*)\)\s*([\d.]+)%\s*positive', re.I)
 _MONTH_MAP = {m: i+1 for i, m in enumerate(
     ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 )}
@@ -371,6 +374,23 @@ class ScrapedEbayAdapter(PlatformAdapter):
         except ValueError:
             return None
 
+    @staticmethod
+    def _parse_feedback_from_item(html: str) -> tuple[Optional[int], Optional[float]]:
+        """Parse feedback count and ratio from a listing page seller card.
+
+        Matches 'username (1,234) 99.1% positive feedback'.
+        Returns (count, ratio) or (None, None) if not found.
+        """
+        m = _ITEM_FEEDBACK_RE.search(html)
+        if not m:
+            return None, None
+        try:
+            count = int(m.group(1).replace(",", ""))
+            ratio = float(m.group(2)) / 100.0
+            return count, ratio
+        except ValueError:
+            return None, None
+
     def enrich_sellers_btf(
         self,
         seller_to_listing: dict[str, str],
@@ -387,19 +407,38 @@ class ScrapedEbayAdapter(PlatformAdapter):
         Does not raise — failures per-seller are silently skipped so the main
         search response is never blocked.
         """
+        db_path = self._store._db_path  # capture for thread-local Store creation
+
         def _enrich_one(item: tuple[str, str]) -> None:
             seller_id, listing_id = item
             try:
                 html = self._fetch_item_html(listing_id)
                 age_days = self._parse_joined_date(html)
+                fb_count, fb_ratio = self._parse_feedback_from_item(html)
+                log.debug(
+                    "BTF enrich: seller=%s age_days=%s feedback=%s ratio=%s",
+                    seller_id, age_days, fb_count, fb_ratio,
+                )
+                if age_days is None and fb_count is None:
+                    return   # nothing new to write
+                thread_store = Store(db_path)
+                seller = thread_store.get_seller("ebay", seller_id)
+                if not seller:
+                    log.warning("BTF enrich: seller %s not found in DB", seller_id)
+                    return
+                from dataclasses import replace
+                updates: dict = {}
                 if age_days is not None:
-                    seller = self._store.get_seller("ebay", seller_id)
-                    if seller:
-                        from dataclasses import replace
-                        updated = replace(seller, account_age_days=age_days)
-                        self._store.save_seller(updated)
-            except Exception:
-                pass  # non-fatal: partial score is better than a crashed enrichment
+                    updates["account_age_days"] = age_days
+                # Only overwrite feedback if the listing page found a real value —
+                # prefer a fresh count over a 0 that came from a failed search parse.
+                if fb_count is not None:
+                    updates["feedback_count"] = fb_count
+                if fb_ratio is not None:
+                    updates["feedback_ratio"] = fb_ratio
+                thread_store.save_seller(replace(seller, **updates))
+            except Exception as exc:
+                log.warning("BTF enrich failed for %s/%s: %s", seller_id, listing_id, exc)
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             list(ex.map(_enrich_one, seller_to_listing.items()))

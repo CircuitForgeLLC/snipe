@@ -4,6 +4,7 @@
     :class="{
       'steal-card': isSteal,
       'listing-card--auction': isAuction && hoursRemaining !== null && hoursRemaining > 1,
+      'listing-card--triple-red': tripleRed,
     }"
   >
     <!-- Thumbnail -->
@@ -69,6 +70,25 @@
       </p>
     </div>
 
+    <!-- Block seller inline form -->
+    <div v-if="blockingOpen" class="card__block-popover" @click.stop>
+      <p class="card__block-title">Block <strong>{{ seller?.username }}</strong>?</p>
+      <input
+        v-model="blockReason"
+        class="card__block-reason"
+        placeholder="Reason (optional)"
+        maxlength="200"
+        @keydown.enter="onBlock"
+        @keydown.esc="blockingOpen = false"
+        autofocus
+      />
+      <div class="card__block-actions">
+        <button class="card__block-confirm" @click="onBlock">Block</button>
+        <button class="card__block-cancel" @click="blockingOpen = false; blockReason = ''; blockError = ''">Cancel</button>
+      </div>
+      <p v-if="blockError" class="card__block-error">{{ blockError }}</p>
+    </div>
+
     <!-- Score + price column -->
     <div class="card__score-col">
       <!-- Trust score badge -->
@@ -98,6 +118,14 @@
           :disabled="enriching"
           @click.stop="onEnrich"
         >{{ enrichError ? '✗' : '↻' }}</button>
+        <!-- Block seller -->
+        <button
+          v-if="seller"
+          class="card__block-btn"
+          :class="{ 'card__block-btn--active': isBlocked }"
+          :title="isBlocked ? 'Seller is blocked' : 'Block this seller'"
+          @click.stop="isBlocked ? null : (blockingOpen = !blockingOpen)"
+        >⚑</button>
       </div>
 
       <!-- Price -->
@@ -123,6 +151,7 @@
 import { computed, ref } from 'vue'
 import type { Listing, TrustScore, Seller } from '../stores/search'
 import { useSearchStore } from '../stores/search'
+import { useBlocklistStore } from '../stores/blocklist'
 
 const props = defineProps<{
   listing: Listing
@@ -132,8 +161,32 @@ const props = defineProps<{
 }>()
 
 const store = useSearchStore()
+const blocklist = useBlocklistStore()
 const enriching = ref(false)
 const enrichError = ref(false)
+const blockingOpen = ref(false)
+const blockReason = ref('')
+const blockError = ref('')
+
+const isBlocked = computed(() =>
+  blocklist.isBlocklisted(props.listing.seller_platform_id),
+)
+
+async function onBlock() {
+  if (!props.seller) return
+  blockError.value = ''
+  try {
+    await blocklist.addSeller(
+      props.listing.seller_platform_id,
+      props.seller.username,
+      blockReason.value.trim(),
+    )
+    blockingOpen.value = false
+    blockReason.value = ''
+  } catch {
+    blockError.value = 'Failed to block — try again'
+  }
+}
 
 async function onEnrich() {
   if (enriching.value) return
@@ -211,7 +264,11 @@ function flagLabel(flag: string): string {
     suspicious_price:      '✗ Suspicious price',
     duplicate_photo:       '✗ Duplicate photo',
     established_bad_actor: '✗ Bad actor',
+    zero_feedback:         '✗ No feedback',
     marketing_photo:       '✗ Marketing photo',
+    scratch_dent_mentioned:'⚠ Damage mentioned',
+    long_on_market:        '⚠ Long on market',
+    significant_price_drop:'⚠ Price dropped',
   }
   return labels[flag] ?? `⚠ ${flag}`
 }
@@ -248,6 +305,20 @@ const trustBadgeTitle = computed(() => {
   const base = `Trust score: ${props.trust?.composite_score ?? '?'}/100`
   if (!pendingSignalNames.value.length) return base
   return `${base} · pending: ${pendingSignalNames.value.join(', ')} (search again to update)`
+})
+
+// Triple Red easter egg: account flag + suspicious price + at least one more hard flag
+const tripleRed = computed(() => {
+  const flags = new Set(redFlags.value)
+  const hasAccountFlag = flags.has('new_account') || flags.has('account_under_30_days')
+  const hasPriceFlag = flags.has('suspicious_price')
+  const hasThirdFlag = (
+    flags.has('duplicate_photo') ||
+    flags.has('established_bad_actor') ||
+    flags.has('zero_feedback') ||
+    flags.has('scratch_dent_mentioned')
+  )
+  return hasAccountFlag && hasPriceFlag && hasThirdFlag
 })
 
 const isSteal = computed(() => {
@@ -470,6 +541,91 @@ const formattedMarket = computed(() => {
   to   { transform: rotate(360deg); }
 }
 
+.card__block-btn {
+  margin-top: 2px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0;
+  padding: 1px 4px;
+  transition: opacity 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+.listing-card:hover .card__block-btn { opacity: 0.5; }
+.listing-card:hover .card__block-btn:hover { opacity: 1; color: var(--color-error); border-color: var(--color-error); }
+.card__block-btn--active { opacity: 1 !important; color: var(--color-error); border-color: var(--color-error); cursor: default; }
+
+/* Block popover */
+.card__block-popover {
+  position: absolute;
+  right: var(--space-4);
+  top: var(--space-4);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  z-index: 10;
+  min-width: 220px;
+  box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.35));
+}
+
+.card__block-title {
+  font-size: 0.8125rem;
+  margin: 0 0 var(--space-2);
+  color: var(--color-text);
+}
+
+.card__block-reason {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  box-sizing: border-box;
+  margin-bottom: var(--space-2);
+}
+
+.card__block-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.card__block-confirm {
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-error);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.card__block-confirm:hover { opacity: 0.85; }
+
+.card__block-cancel {
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.card__block-cancel:hover { border-color: var(--color-text-muted); }
+
+.card__block-error {
+  font-size: 0.75rem;
+  color: var(--color-error);
+  margin: var(--space-1) 0 0;
+}
+
 .card__price-wrap {
   display: flex;
   flex-direction: column;
@@ -498,11 +654,79 @@ const formattedMarket = computed(() => {
   font-family: var(--font-mono);
 }
 
+/* ── Triple Red easter egg ──────────────────────────────────────────────── */
+/* Fires when: (new_account | account_under_30d) + suspicious_price + hard flag */
+.listing-card--triple-red {
+  animation: triple-red-glow 2s ease-in-out infinite;
+}
+
+.listing-card--triple-red::after {
+  content: '✗';
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-2);
+  font-size: 4rem;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--color-error);
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: 0;
+  animation: triple-red-glitch 2.4s steps(1) infinite;
+  transition: opacity 350ms ease;
+  user-select: none;
+}
+
+/* On hover: glow settles, ✗ fades away */
+.listing-card--triple-red:hover {
+  animation: none;
+  border-color: var(--color-error);
+  box-shadow: 0 0 10px 2px rgba(248, 81, 73, 0.35);
+}
+
+.listing-card--triple-red:hover::after {
+  animation: none;
+  opacity: 0;
+}
+
+@keyframes triple-red-glow {
+  0%, 100% {
+    border-color: rgba(248, 81, 73, 0.5);
+    box-shadow: 0 0 5px 1px rgba(248, 81, 73, 0.2);
+  }
+  50% {
+    border-color: var(--color-error);
+    box-shadow: 0 0 14px 3px rgba(248, 81, 73, 0.45);
+  }
+}
+
+/* Glitch: mostly still, rapid jitter bursts every ~2.4s */
+@keyframes triple-red-glitch {
+  0%, 80%, 100% { transform: translate(0, 0);         opacity: 0.15; }
+  82%            { transform: translate(-4px, 2px);    opacity: 0.35; }
+  84%            { transform: translate(3px, -2px);    opacity: 0.1;  }
+  86%            { transform: translate(-3px, -3px);   opacity: 0.4;  }
+  88%            { transform: translate(5px, 1px);     opacity: 0.08; }
+  90%            { transform: translate(-2px, 3px);    opacity: 0.3;  }
+  92%            { transform: translate(0, 0);         opacity: 0.15; }
+}
+
 /* Mobile: stack vertically */
 @media (max-width: 600px) {
   .listing-card {
-    grid-template-columns: 60px 1fr;
+    grid-template-columns: 68px 1fr;
     grid-template-rows: auto auto;
+    padding: var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .card__thumb {
+    width: 68px;
+    height: 68px;
+  }
+
+  .card__title {
+    font-size: 0.875rem;
   }
 
   .card__score-col {
@@ -513,6 +737,27 @@ const formattedMarket = computed(() => {
     min-width: unset;
     padding-top: var(--space-2);
     border-top: 1px solid var(--color-border);
+  }
+
+  /* Trust badge + dots: side by side instead of stacked */
+  .card__trust {
+    flex-direction: row;
+    gap: var(--space-2);
+    min-width: unset;
+    padding: var(--space-1) var(--space-3);
+  }
+
+  /* Price + market price: row layout */
+  .card__price-block {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  /* Enrich + block buttons: always visible on mobile (no hover) */
+  .card__enrich-btn,
+  .card__block-btn {
+    opacity: 0.6;
   }
 }
 </style>

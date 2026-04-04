@@ -159,6 +159,7 @@ docker compose -f compose.cloud.yml -p snipe-cloud build api  # after Python cha
 Online auctions are frustrating because:
 - Winning requires being present at the exact closing moment — sometimes 2 AM
 - Platforms vary wildly: some allow proxy bids, some don't; closing times extend on activity
+- Scammers exploit auction urgency — new accounts, stolen photos, pressure to pay outside platform
 - Price history is hidden — you don't know if an item is underpriced or a trap
 - Sellers hide damage in descriptions rather than titles to avoid automated filters
 - Shipping logistics for large / fragile antiques require coordination with the auction house

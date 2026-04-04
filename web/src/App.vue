@@ -18,17 +18,20 @@ import { useMotion } from './composables/useMotion'
 import { useSnipeMode } from './composables/useSnipeMode'
 import { useKonamiCode } from './composables/useKonamiCode'
 import { useSessionStore } from './stores/session'
+import { useBlocklistStore } from './stores/blocklist'
 import AppNav from './components/AppNav.vue'
 
 const motion = useMotion()
 const { activate, restore } = useSnipeMode()
 const session = useSessionStore()
+const blocklistStore = useBlocklistStore()
 
 useKonamiCode(activate)
 
 onMounted(() => {
-  restore()           // re-apply snipe mode from localStorage on hard reload
-  session.bootstrap() // fetch tier + feature flags from API
+  restore()                      // re-apply snipe mode from localStorage on hard reload
+  session.bootstrap()            // fetch tier + feature flags from API
+  blocklistStore.fetchBlocklist() // pre-load so card block buttons reflect state immediately
 })
 </script>
 

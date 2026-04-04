@@ -76,6 +76,7 @@ class Aggregator:
         first_seen_at: Optional[str] = None,
         price: float = 0.0,
         price_at_first_seen: Optional[float] = None,
+        is_blocklisted: bool = False,
     ) -> TrustScore:
         is_partial = any(v is None for v in signal_scores.values())
         clean = {k: (v if v is not None else 0) for k, v in signal_scores.items()}
@@ -92,6 +93,23 @@ class Aggregator:
 
         red_flags: list[str] = []
 
+        # Blocklist: force established_bad_actor and zero the score regardless of other signals.
+        if is_blocklisted:
+            red_flags.append("established_bad_actor")
+            composite = 0
+            return TrustScore(
+                listing_id=listing_id,
+                composite_score=composite,
+                account_age_score=clean["account_age"],
+                feedback_count_score=clean["feedback_count"],
+                feedback_ratio_score=clean["feedback_ratio"],
+                price_vs_market_score=clean["price_vs_market"],
+                category_history_score=clean["category_history"],
+                photo_hash_duplicate=photo_hash_duplicate,
+                red_flags_json=json.dumps(red_flags),
+                score_is_partial=is_partial,
+            )
+
         # Hard filters
         if seller and seller.account_age_days is not None and seller.account_age_days < HARD_FILTER_AGE_DAYS:
             red_flags.append("new_account")
@@ -100,6 +118,11 @@ class Aggregator:
             and seller.feedback_count > HARD_FILTER_BAD_RATIO_MIN_COUNT
         ):
             red_flags.append("established_bad_actor")
+        if seller and seller.feedback_count == 0:
+            red_flags.append("zero_feedback")
+            # Zero feedback is a deliberate signal, not missing data — cap composite score
+            # so a 0-feedback seller can never appear trustworthy on other signals alone.
+            composite = min(composite, 35)
 
         # Soft flags
         if seller and seller.account_age_days is not None and seller.account_age_days < 30:

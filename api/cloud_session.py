@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import jwt as pyjwt
 import requests
 from fastapi import Depends, HTTPException, Request
 
@@ -109,7 +110,6 @@ def validate_session_jwt(token: str) -> str:
     Directus 11+ uses 'id' (not 'sub') for the user UUID in its JWT payload.
     """
     try:
-        import jwt as pyjwt
         payload = pyjwt.decode(
             token,
             DIRECTUS_JWT_SECRET,
