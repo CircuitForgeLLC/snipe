@@ -120,6 +120,7 @@ export const useSearchStore = defineStore('search', () => {
   )
   const marketPrice = ref<number | null>(cached?.marketPrice ?? null)
   const adapterUsed = ref<'api' | 'scraper' | null>(cached?.adapterUsed ?? null)
+  const affiliateActive = ref<boolean>(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -164,6 +165,7 @@ export const useSearchStore = defineStore('search', () => {
         sellers: Record<string, Seller>
         market_price: number | null
         adapter_used: 'api' | 'scraper'
+        affiliate_active: boolean
       }
 
       results.value = data.listings ?? []
@@ -171,6 +173,7 @@ export const useSearchStore = defineStore('search', () => {
       sellers.value = new Map(Object.entries(data.sellers ?? {}))
       marketPrice.value = data.market_price ?? null
       adapterUsed.value = data.adapter_used ?? null
+      affiliateActive.value = data.affiliate_active ?? false
       saveCache({
         query: q,
         results: results.value,
@@ -225,6 +228,7 @@ export const useSearchStore = defineStore('search', () => {
     sellers,
     marketPrice,
     adapterUsed,
+    affiliateActive,
     loading,
     error,
     search,

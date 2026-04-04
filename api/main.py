@@ -69,6 +69,22 @@ def _ebay_creds() -> tuple[str, str, str]:
         client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
     return client_id, client_secret, env
 
+def _affiliate_url(url: str) -> str:
+    """Append EPN affiliate params when EBAY_AFFILIATE_CAMPAIGN_ID is configured.
+
+    If the env var is absent or blank, the original URL is returned unchanged.
+    Params follow the standard EPN deep-link format; siteid=0 = US.
+    """
+    campaign_id = os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()
+    if not campaign_id:
+        return url
+    sep = "&" if "?" in url else "?"
+    return (
+        f"{url}{sep}mkcid=1&mkrid=711-53200-19255-0"
+        f"&siteid=0&campid={campaign_id}&toolid=10001&mkevt=1"
+    )
+
+
 app = FastAPI(title="Snipe API", version="0.1.0", lifespan=_lifespan)
 app.include_router(ebay_webhook_router)
 
@@ -395,12 +411,18 @@ def search(
         and shared_store.get_seller("ebay", listing.seller_platform_id)
     }
 
+    def _serialize_listing(l: object) -> dict:
+        d = dataclasses.asdict(l)
+        d["url"] = _affiliate_url(d["url"])
+        return d
+
     return {
-        "listings": [dataclasses.asdict(l) for l in listings],
+        "listings": [_serialize_listing(l) for l in listings],
         "trust_scores": trust_map,
         "sellers": seller_map,
         "market_price": market_price,
         "adapter_used": adapter_used,
+        "affiliate_active": bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()),
     }
 
 

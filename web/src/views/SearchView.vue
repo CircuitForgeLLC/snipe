@@ -296,6 +296,9 @@
               <span v-if="hiddenCount > 0" class="results-hidden">
                 · {{ hiddenCount }} hidden by filters
               </span>
+              <span v-if="store.affiliateActive" class="affiliate-disclosure">
+                · Links may include an affiliate code
+              </span>
             </p>
             <div class="toolbar-actions">
               <label for="sort-select" class="sr-only">Sort by</label>
@@ -1029,6 +1032,7 @@ async function onSearch() {
 }
 
 .results-hidden { color: var(--color-warning); }
+.affiliate-disclosure { color: var(--color-text-muted, #8b949e); font-size: 0.8em; }
 
 .toolbar-actions {
   display: flex;
