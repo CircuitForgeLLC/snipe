@@ -11,6 +11,12 @@ from pathlib import Path
 
 import csv
 import io
+import platform as _platform
+import subprocess
+from datetime import datetime, timezone
+from typing import Literal
+
+import requests as _requests
 from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -629,3 +635,119 @@ async def import_blocklist(
 
     log.info("Blocklist import: %d added, %d errors", imported, len(errors))
     return {"imported": imported, "errors": errors}
+
+
+# ── Feedback ────────────────────────────────────────────────────────────────
+# Creates Forgejo issues from in-app beta feedback.
+# Silently disabled when FORGEJO_API_TOKEN is not set.
+
+_FEEDBACK_LABEL_COLORS = {
+    "beta-feedback": "#0075ca",
+    "needs-triage": "#e4e669",
+    "bug": "#d73a4a",
+    "feature-request": "#a2eeef",
+    "question": "#d876e3",
+}
+
+
+def _fb_headers() -> dict:
+    token = os.environ.get("FORGEJO_API_TOKEN", "")
+    return {"Authorization": f"token {token}", "Content-Type": "application/json"}
+
+
+def _ensure_feedback_labels(names: list[str]) -> list[int]:
+    base = os.environ.get("FORGEJO_API_URL", "https://git.opensourcesolarpunk.com/api/v1")
+    repo = os.environ.get("FORGEJO_REPO", "Circuit-Forge/snipe")
+    resp = _requests.get(f"{base}/repos/{repo}/labels", headers=_fb_headers(), timeout=10)
+    existing = {lb["name"]: lb["id"] for lb in resp.json()} if resp.ok else {}
+    ids: list[int] = []
+    for name in names:
+        if name in existing:
+            ids.append(existing[name])
+        else:
+            r = _requests.post(
+                f"{base}/repos/{repo}/labels",
+                headers=_fb_headers(),
+                json={"name": name, "color": _FEEDBACK_LABEL_COLORS.get(name, "#ededed")},
+                timeout=10,
+            )
+            if r.ok:
+                ids.append(r.json()["id"])
+    return ids
+
+
+class FeedbackRequest(BaseModel):
+    title: str
+    description: str
+    type: Literal["bug", "feature", "other"] = "other"
+    repro: str = ""
+    view: str = "unknown"
+    submitter: str = ""
+
+
+class FeedbackResponse(BaseModel):
+    issue_number: int
+    issue_url: str
+
+
+@app.get("/api/feedback/status")
+def feedback_status() -> dict:
+    """Return whether feedback submission is configured on this instance."""
+    demo = os.environ.get("DEMO_MODE", "false").lower() in ("1", "true", "yes")
+    return {"enabled": bool(os.environ.get("FORGEJO_API_TOKEN")) and not demo}
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
+    """File a Forgejo issue from in-app feedback."""
+    token = os.environ.get("FORGEJO_API_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="Feedback disabled: FORGEJO_API_TOKEN not configured.")
+    if os.environ.get("DEMO_MODE", "false").lower() in ("1", "true", "yes"):
+        raise HTTPException(status_code=403, detail="Feedback disabled in demo mode.")
+
+    try:
+        version = subprocess.check_output(
+            ["git", "describe", "--tags", "--always"],
+            cwd=Path(__file__).resolve().parents[1], text=True, timeout=5,
+        ).strip()
+    except Exception:
+        version = "dev"
+
+    _TYPE_LABELS = {"bug": "🐛 Bug", "feature": "✨ Feature Request", "other": "💬 Other"}
+    body_lines = [
+        f"## {_TYPE_LABELS.get(payload.type, '💬 Other')}",
+        "",
+        payload.description,
+        "",
+    ]
+    if payload.type == "bug" and payload.repro:
+        body_lines += ["### Reproduction Steps", "", payload.repro, ""]
+    body_lines += [
+        "### Context", "",
+        f"- **view:** {payload.view}",
+        f"- **version:** {version}",
+        f"- **platform:** {_platform.platform()}",
+        f"- **timestamp:** {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+        "",
+    ]
+    if payload.submitter:
+        body_lines += ["---", f"*Submitted by: {payload.submitter}*"]
+
+    labels = ["beta-feedback", "needs-triage",
+               {"bug": "bug", "feature": "feature-request"}.get(payload.type, "question")]
+    base = os.environ.get("FORGEJO_API_URL", "https://git.opensourcesolarpunk.com/api/v1")
+    repo = os.environ.get("FORGEJO_REPO", "Circuit-Forge/snipe")
+
+    label_ids = _ensure_feedback_labels(labels)
+    resp = _requests.post(
+        f"{base}/repos/{repo}/issues",
+        headers=_fb_headers(),
+        json={"title": payload.title, "body": "\n".join(body_lines), "labels": label_ids},
+        timeout=15,
+    )
+    if not resp.ok:
+        raise HTTPException(status_code=502, detail=f"Forgejo error: {resp.text[:200]}")
+
+    data = resp.json()
+    return FeedbackResponse(issue_number=data["number"], issue_url=data["html_url"])
