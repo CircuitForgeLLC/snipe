@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from circuitforge_core.config import load_env
+from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from app.db.store import Store
 from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
@@ -68,21 +69,6 @@ def _ebay_creds() -> tuple[str, str, str]:
         client_id = (os.environ.get("EBAY_APP_ID") or os.environ.get("EBAY_CLIENT_ID", "")).strip()
         client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
     return client_id, client_secret, env
-
-def _affiliate_url(url: str) -> str:
-    """Append EPN affiliate params when EBAY_AFFILIATE_CAMPAIGN_ID is configured.
-
-    If the env var is absent or blank, the original URL is returned unchanged.
-    Params follow the standard EPN deep-link format; siteid=0 = US.
-    """
-    campaign_id = os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()
-    if not campaign_id:
-        return url
-    sep = "&" if "?" in url else "?"
-    return (
-        f"{url}{sep}mkcid=1&mkrid=711-53200-19255-0"
-        f"&siteid=0&campid={campaign_id}&toolid=10001&mkevt=1"
-    )
 
 
 app = FastAPI(title="Snipe API", version="0.1.0", lifespan=_lifespan)
@@ -413,7 +399,7 @@ def search(
 
     def _serialize_listing(l: object) -> dict:
         d = dataclasses.asdict(l)
-        d["url"] = _affiliate_url(d["url"])
+        d["url"] = _wrap_affiliate_url(d["url"], retailer="ebay")
         return d
 
     return {
