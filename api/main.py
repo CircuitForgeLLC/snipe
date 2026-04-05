@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from circuitforge_core.config import load_env
+from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from app.db.store import Store
 from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
@@ -68,6 +69,7 @@ def _ebay_creds() -> tuple[str, str, str]:
         client_id = (os.environ.get("EBAY_APP_ID") or os.environ.get("EBAY_CLIENT_ID", "")).strip()
         client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
     return client_id, client_secret, env
+
 
 app = FastAPI(title="Snipe API", version="0.1.0", lifespan=_lifespan)
 app.include_router(ebay_webhook_router)
@@ -395,12 +397,18 @@ def search(
         and shared_store.get_seller("ebay", listing.seller_platform_id)
     }
 
+    def _serialize_listing(l: object) -> dict:
+        d = dataclasses.asdict(l)
+        d["url"] = _wrap_affiliate_url(d["url"], retailer="ebay")
+        return d
+
     return {
-        "listings": [dataclasses.asdict(l) for l in listings],
+        "listings": [_serialize_listing(l) for l in listings],
         "trust_scores": trust_map,
         "sellers": seller_map,
         "market_price": market_price,
         "adapter_used": adapter_used,
+        "affiliate_active": bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()),
     }
 
 
