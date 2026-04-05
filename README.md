@@ -2,7 +2,7 @@
 
 > *Part of the Circuit Forge LLC "AI for the tasks you hate most" suite.*
 
-**Status:** Active — eBay listing search + seller trust scoring MVP complete. Auction sniping engine and multi-platform support are next.
+**Status:** Active — eBay listing intelligence MVP complete (search, trust scoring, affiliate links, feedback FAB, vision task scheduling). Auction sniping engine and multi-platform support are next.
 
 ## What it does
 
@@ -67,6 +67,20 @@ Scans listing titles for signals the item may have undisclosed damage or problem
 - **Background (scraper)**: `/itm/` listing pages scraped for seller "Joined" date via Playwright + Xvfb (Kasada-safe headed Chromium)
 - **On-demand**: ↻ button on any listing card triggers `POST /api/enrich` — runs enrichment and re-scores without waiting for a second search
 - **Category history**: derived from the seller's accumulated listing data (Browse API `categories` field); improves with every search, no extra API calls
+
+### Affiliate link builder
+
+Listing cards surface eBay affiliate-wrapped URLs. Uses `circuitforge_core.affiliates.wrap_url` — resolution order: user opted out → plain URL; user has BYOK affiliate ID → their ID; CF env var set (`EBAY_AFFILIATE_ID`) → CF's ID; otherwise plain URL. Users can configure their own eBay Partner Network ID or opt out entirely in Settings.
+
+Disclosure tooltip appears on first encounter per-session and on each wrapped link (per-retailer copy from `get_disclosure_text`).
+
+### Feedback FAB
+
+In-app feedback button (bottom-right FAB) opens a modal: title, description, optional screenshot. Posts to the CF feedback endpoint. Status probed on load; FAB hidden if endpoint unreachable.
+
+### Vision task scheduling
+
+Photo condition assessment tasks queued through `circuitforge_core.tasks.TaskScheduler` — VRAM-aware slot management shared with any other LLM workloads on the same host. Runs moondream2 locally (free tier) or Claude vision (paid/cloud). Results stored per-listing and update the trust score card.
 
 ### Market price comparison
 Completed sales fetched via eBay Marketplace Insights API (with Browse API fallback for app tiers that don't have Insights access). Median stored per query hash, used to score `price_vs_market` across all listings in a search.
