@@ -80,6 +80,45 @@ def test_suspicious_price_flagged_when_price_genuinely_low():
     assert "suspicious_price" in result.red_flags_json
 
 
+def test_scratch_dent_flagged_from_title_slash_variant():
+    """Title containing 'parts/repair' (slash variant, no 'or') must trigger scratch_dent_mentioned."""
+    agg = Aggregator()
+    scores = {k: 15 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    result = agg.aggregate(
+        scores, photo_hash_duplicate=False, seller=None,
+        listing_title="Generic Widget XL - Parts/Repair",
+    )
+    assert "scratch_dent_mentioned" in result.red_flags_json
+
+
+def test_scratch_dent_flagged_from_condition_field():
+    """eBay formal condition 'for parts or not working' must trigger scratch_dent_mentioned
+    even when the listing title contains no damage keywords."""
+    agg = Aggregator()
+    scores = {k: 15 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    result = agg.aggregate(
+        scores, photo_hash_duplicate=False, seller=None,
+        listing_title="Generic Widget XL",
+        listing_condition="for parts or not working",
+    )
+    assert "scratch_dent_mentioned" in result.red_flags_json
+
+
+def test_scratch_dent_not_flagged_for_clean_listing():
+    """Clean title + 'New' condition must NOT trigger scratch_dent_mentioned."""
+    agg = Aggregator()
+    scores = {k: 15 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    result = agg.aggregate(
+        scores, photo_hash_duplicate=False, seller=None,
+        listing_title="Generic Widget XL",
+        listing_condition="new",
+    )
+    assert "scratch_dent_mentioned" not in result.red_flags_json
+
+
 def test_new_account_not_flagged_when_age_absent():
     """account_age_days=None (scraper tier) must NOT trigger new_account or account_under_30_days."""
     agg = Aggregator()

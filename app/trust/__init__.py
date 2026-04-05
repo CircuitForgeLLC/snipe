@@ -52,6 +52,7 @@ class TrustScorer:
                 signal_scores, is_dup, seller,
                 listing_id=listing.id or 0,
                 listing_title=listing.title,
+                listing_condition=listing.condition,
                 times_seen=listing.times_seen,
                 first_seen_at=listing.first_seen_at,
                 price=listing.price,

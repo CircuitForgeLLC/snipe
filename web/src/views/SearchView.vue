@@ -91,6 +91,17 @@
         aria-label="Search filters"
       >
 
+        <!-- Clear all filters — only shown when at least one filter is active -->
+        <button
+          v-if="activeFilterCount > 0"
+          type="button"
+          class="filter-clear-btn"
+          @click="resetFilters"
+          aria-label="Clear all filters"
+        >
+          ✕ Clear filters ({{ activeFilterCount }})
+        </button>
+
         <!-- ── eBay Search Parameters ─────────────────────────────────────── -->
         <!-- These are sent to eBay. Changes require a new search to take effect. -->
         <h2 class="filter-section-heading filter-section-heading--search">
@@ -405,7 +416,7 @@ onMounted(() => {
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
-const filters = reactive<SearchFilters>({
+const DEFAULT_FILTERS: SearchFilters = {
   minTrustScore: 0,
   minPrice: undefined,
   maxPrice: undefined,
@@ -424,7 +435,13 @@ const filters = reactive<SearchFilters>({
   mustExclude: '',
   categoryId: '',
   adapter: 'auto' as 'auto' | 'api' | 'scraper',
-})
+}
+
+const filters = reactive<SearchFilters>({ ...DEFAULT_FILTERS })
+
+function resetFilters() {
+  Object.assign(filters, DEFAULT_FILTERS)
+}
 
 // Parse comma-separated keyword strings into trimmed, lowercase, non-empty term arrays
 const parsedMustInclude = computed(() =>
@@ -765,6 +782,27 @@ async function onSearch() {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: var(--space-2);
+}
+
+/* Clear all filters button */
+.filter-clear-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-2);
+  background: color-mix(in srgb, var(--color-red, #ef4444) 12%, transparent);
+  color: var(--color-red, #ef4444);
+  border: 1px solid color-mix(in srgb, var(--color-red, #ef4444) 30%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.filter-clear-btn:hover {
+  background: color-mix(in srgb, var(--color-red, #ef4444) 22%, transparent);
 }
 
 /* Section headings that separate eBay Search params from local filters */

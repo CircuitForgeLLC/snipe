@@ -23,8 +23,9 @@ _SCRATCH_DENT_KEYWORDS = frozenset([
     "crack", "cracked", "chip", "chipped",
     "damage", "damaged", "cosmetic damage",
     "blemish", "wear", "worn", "worn in",
-    # Parts / condition catch-alls
+    # Parts / condition catch-alls (also matches eBay condition field strings verbatim)
     "as is", "for parts", "parts only", "spares or repair", "parts or repair",
+    "parts/repair", "parts or not working", "not working",
     # Evasive redirects — seller hiding damage detail in listing body
     "see description", "read description", "read listing", "see listing",
     "see photos for", "see pics for", "see images for",
@@ -72,6 +73,7 @@ class Aggregator:
         seller: Optional[Seller],
         listing_id: int = 0,
         listing_title: str = "",
+        listing_condition: str = "",
         times_seen: int = 1,
         first_seen_at: Optional[str] = None,
         price: float = 0.0,
@@ -137,7 +139,9 @@ class Aggregator:
         )
         if photo_hash_duplicate and not is_established_retailer:
             red_flags.append("duplicate_photo")
-        if listing_title and _has_damage_keywords(listing_title):
+        if (listing_title and _has_damage_keywords(listing_title)) or (
+            listing_condition and _has_damage_keywords(listing_condition)
+        ):
             red_flags.append("scratch_dent_mentioned")
 
         # Staging DB signals
