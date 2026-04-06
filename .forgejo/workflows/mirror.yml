@@ -16,9 +16,9 @@ jobs:
 
       - name: Push to GitHub
         env:
-          GITHUB_MIRROR_TOKEN: ${{ secrets.GITHUB_MIRROR_TOKEN }}
+          GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
         run: |
-          git remote add github https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/CircuitForgeLLC/snipe.git
+          git remote add github https://x-access-token:${GH_MIRROR_TOKEN}@github.com/CircuitForgeLLC/snipe.git
           git push github --mirror
 
   mirror-codeberg:
