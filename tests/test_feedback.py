@@ -99,7 +99,7 @@ def test_submit_creates_issue(monkeypatch):
             "description": "Trust score shows 0 when seller has 1000 feedback",
             "type": "bug",
             "repro": "1. Search for anything\n2. Check trust score",
-            "view": "search",
+            "tab": "search",
         })
 
     assert res.status_code == 200
