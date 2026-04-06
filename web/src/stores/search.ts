@@ -123,8 +123,10 @@ export const useSearchStore = defineStore('search', () => {
   const affiliateActive = ref<boolean>(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const enriching = ref(false)   // true while SSE stream is open
 
   let _abort: AbortController | null = null
+  let _sse: EventSource | null = null
 
   function cancelSearch() {
     _abort?.abort()
@@ -166,6 +168,7 @@ export const useSearchStore = defineStore('search', () => {
         market_price: number | null
         adapter_used: 'api' | 'scraper'
         affiliate_active: boolean
+        session_id: string | null
       }
 
       results.value = data.listings ?? []
@@ -182,6 +185,12 @@ export const useSearchStore = defineStore('search', () => {
         marketPrice: marketPrice.value,
         adapterUsed: adapterUsed.value,
       })
+
+      // Open SSE stream if any scores are partial and a session_id was provided
+      const hasPartial = Object.values(data.trust_scores ?? {}).some(ts => ts.score_is_partial)
+      if (data.session_id && hasPartial) {
+        _openUpdates(data.session_id, apiBase)
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         // User cancelled — clear loading but don't surface as an error
@@ -193,6 +202,57 @@ export const useSearchStore = defineStore('search', () => {
     } finally {
       loading.value = false
       _abort = null
+    }
+  }
+
+  function closeUpdates() {
+    if (_sse) {
+      _sse.close()
+      _sse = null
+    }
+    enriching.value = false
+  }
+
+  function _openUpdates(sessionId: string, apiBase: string) {
+    closeUpdates()  // close any previous stream
+    enriching.value = true
+
+    const es = new EventSource(`${apiBase}/api/updates/${sessionId}`)
+    _sse = es
+
+    es.onmessage = (e) => {
+      try {
+        const update = JSON.parse(e.data) as {
+          platform_listing_id: string
+          trust_score: TrustScore
+          seller: Record<string, unknown>
+          market_price: number | null
+        }
+        if (update.platform_listing_id && update.trust_score) {
+          trustScores.value = new Map(trustScores.value)
+          trustScores.value.set(update.platform_listing_id, update.trust_score)
+        }
+        if (update.seller) {
+          const s = update.seller as Seller
+          if (s.platform_seller_id) {
+            sellers.value = new Map(sellers.value)
+            sellers.value.set(s.platform_seller_id, s)
+          }
+        }
+        if (update.market_price != null) {
+          marketPrice.value = update.market_price
+        }
+      } catch {
+        // malformed event — ignore
+      }
+    }
+
+    es.addEventListener('done', () => {
+      closeUpdates()
+    })
+
+    es.onerror = () => {
+      closeUpdates()
     }
   }
 
@@ -230,10 +290,12 @@ export const useSearchStore = defineStore('search', () => {
     adapterUsed,
     affiliateActive,
     loading,
+    enriching,
     error,
     search,
     cancelSearch,
     enrichSeller,
+    closeUpdates,
     clearResults,
   }
 })

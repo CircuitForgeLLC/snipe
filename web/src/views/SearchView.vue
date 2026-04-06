@@ -312,6 +312,11 @@
               </span>
             </p>
             <div class="toolbar-actions">
+              <!-- Live enrichment indicator — visible while SSE stream is open -->
+              <span v-if="store.enriching" class="enriching-badge" aria-live="polite" title="Scores updating as seller data arrives">
+                <span class="enriching-dot" aria-hidden="true"></span>
+                Updating scores…
+              </span>
               <label for="sort-select" class="sr-only">Sort by</label>
               <select id="sort-select" v-model="sortBy" class="sort-select">
                 <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">
@@ -1077,6 +1082,33 @@ async function onSearch() {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.enriching-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--app-primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-primary) 30%, transparent);
+  border-radius: var(--radius-full, 9999px);
+  color: var(--app-primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.enriching-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-primary);
+  animation: enriching-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes enriching-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
 }
 
 .save-btn {
