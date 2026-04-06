@@ -3,11 +3,14 @@ services:
     build:
       context: ..
       dockerfile: snipe/Dockerfile
-    ports:
-      - "8510:8510"
+    # Host networking lets nginx (in the web container) reach the API at
+    # 172.17.0.1:8510 (the Docker bridge gateway). Required — nginx.conf
+    # is baked into the image and hard-codes that address.
+    network_mode: host
     env_file: .env
     volumes:
       - ./data:/app/snipe/data
+    restart: unless-stopped
 
   web:
     build:

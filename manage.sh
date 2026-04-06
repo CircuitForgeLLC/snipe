@@ -78,7 +78,7 @@ case "$cmd" in
     test)
         echo "Running test suite..."
         docker compose -f "$COMPOSE_FILE" exec api \
-            conda run -n job-seeker python -m pytest /app/snipe/tests/ -v "${@}"
+            python -m pytest /app/snipe/tests/ -v "${@}"
         ;;
 
     # ── Cloud commands ────────────────────────────────────────────────────────

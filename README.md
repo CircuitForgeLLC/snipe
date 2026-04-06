@@ -4,6 +4,50 @@
 
 **Status:** Active — eBay listing intelligence MVP complete (search, trust scoring, affiliate links, feedback FAB, vision task scheduling). Auction sniping engine and multi-platform support are next.
 
+## Quick install (self-hosted)
+
+**Requirements:** Docker with Compose plugin, Git. No API keys needed to get started.
+
+```bash
+# One-line install — clones to ~/snipe by default
+bash <(curl -fsSL https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/raw/branch/main/install.sh)
+
+# Or clone manually and run the script:
+git clone https://git.opensourcesolarpunk.com/Circuit-Forge/snipe.git
+bash snipe/install.sh
+```
+
+Then open **http://localhost:8509**.
+
+### Manual setup (if you prefer)
+
+Snipe's API image is built from a parent context that includes `circuitforge-core`. Both repos must sit as siblings in the same directory:
+
+```
+workspace/
+├── snipe/               ← this repo
+└── circuitforge-core/   ← required sibling
+```
+
+```bash
+mkdir snipe-workspace && cd snipe-workspace
+git clone https://git.opensourcesolarpunk.com/Circuit-Forge/snipe.git
+git clone https://git.opensourcesolarpunk.com/Circuit-Forge/circuitforge-core.git
+cd snipe
+cp .env.example .env   # edit if you have eBay API credentials (optional)
+./manage.sh start
+```
+
+### Optional: eBay API credentials
+
+Snipe works without any credentials using its Playwright scraper fallback. Adding eBay API credentials unlocks faster searches and inline seller account age (no extra scrape needed):
+
+1. Register at [developer.ebay.com](https://developer.ebay.com/my/keys)
+2. Copy your Production **App ID** and **Cert ID** into `.env`
+3. Restart: `./manage.sh restart`
+
+---
+
 ## What it does
 
 Snipe has two layers that work together:
