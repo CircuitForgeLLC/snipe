@@ -1,13 +1,17 @@
 """Render a single listing row with trust score, badges, and error states."""
 from __future__ import annotations
+
 import json
 from typing import Optional
 
 import streamlit as st
 
-from app.db.models import Listing, TrustScore, Seller
+from app.db.models import Listing, Seller, TrustScore
 from app.ui.components.easter_eggs import (
-    is_steal, render_steal_banner, render_auction_notice, auction_hours_remaining,
+    auction_hours_remaining,
+    is_steal,
+    render_auction_notice,
+    render_steal_banner,
 )
 
 

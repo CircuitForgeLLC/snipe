@@ -1,8 +1,11 @@
 """Snipe FastAPI — search endpoint wired to ScrapedEbayAdapter + TrustScorer."""
 from __future__ import annotations
 
+import asyncio
+import csv
 import dataclasses
 import hashlib
+import io
 import json as _json
 import logging
 import os
@@ -12,28 +15,25 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import asyncio
-import csv
-import io
-
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-
-from circuitforge_core.config import load_env
 from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from circuitforge_core.api import make_feedback_router as _make_feedback_router
+from circuitforge_core.config import load_env
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from api.cloud_session import CloudUser, compute_features, get_session
+from api.ebay_webhook import router as ebay_webhook_router
+from app.db.models import SavedSearch as SavedSearchModel
+from app.db.models import ScammerEntry
 from app.db.store import Store
-from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
-from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.platforms.ebay.adapter import EbayAdapter
 from app.platforms.ebay.auth import EbayTokenManager
 from app.platforms.ebay.query_builder import expand_queries, parse_groups
+from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.trust import TrustScorer
-from api.cloud_session import CloudUser, compute_features, get_session
-from api.ebay_webhook import router as ebay_webhook_router
 
 load_env(Path(".env"))
 log = logging.getLogger(__name__)
@@ -50,8 +50,8 @@ async def _lifespan(app: FastAPI):
     # Start vision/LLM background task scheduler.
     # background_tasks queue lives in shared_db (cloud) or local_db (local)
     # so the scheduler has a single stable DB path across all cloud users.
+    from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
     from app.tasks.scheduler import get_scheduler, reset_scheduler
-    from api.cloud_session import CLOUD_MODE, _LOCAL_SNIPE_DB, _shared_db_path
     sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     get_scheduler(sched_db)
     log.info("Snipe task scheduler started (db=%s)", sched_db)
@@ -245,9 +245,10 @@ def _enqueue_vision_tasks(
                        trust_scores table in cloud mode.
     """
     import json as _json
+
+    from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
     from app.tasks.runner import insert_task
     from app.tasks.scheduler import get_scheduler
-    from api.cloud_session import CLOUD_MODE, _shared_db_path, _LOCAL_SNIPE_DB
 
     sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     sched = get_scheduler(sched_db)

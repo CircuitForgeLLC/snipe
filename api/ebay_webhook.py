@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, Header, HTTPException, Request
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
 from cryptography.hazmat.primitives.hashes import SHA1
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.db.store import Store
 

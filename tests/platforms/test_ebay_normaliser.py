@@ -1,4 +1,5 @@
 import pytest
+
 from app.platforms.ebay.normaliser import normalise_listing, normalise_seller
 
 

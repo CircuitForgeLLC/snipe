@@ -1,5 +1,6 @@
 """Thin SQLite read/write layer for all Snipe models."""
 from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Optional
 
 from circuitforge_core.db import get_connection, run_migrations
 
-from .models import Listing, Seller, TrustScore, MarketComp, SavedSearch, ScammerEntry
+from .models import Listing, MarketComp, SavedSearch, ScammerEntry, Seller, TrustScore
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 

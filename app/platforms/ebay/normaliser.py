@@ -1,8 +1,10 @@
 """Convert raw eBay API responses into Snipe domain objects."""
 from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from typing import Optional
+
 from app.db.models import Listing, Seller
 
 

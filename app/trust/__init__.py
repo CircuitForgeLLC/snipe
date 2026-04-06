@@ -1,10 +1,13 @@
-from .metadata import MetadataScorer
-from .photo import PhotoScorer
-from .aggregator import Aggregator
-from app.db.models import Seller, Listing, TrustScore
-from app.db.store import Store
 import hashlib
 import math
+
+from app.db.models import Listing, TrustScore
+from app.db.models import Seller as Seller
+from app.db.store import Store
+
+from .aggregator import Aggregator
+from .metadata import MetadataScorer
+from .photo import PhotoScorer
 
 
 class TrustScorer:

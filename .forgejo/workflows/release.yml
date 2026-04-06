@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    name: Build images + create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@v3
+        id: cliff
+        with:
+          config: .cliff.toml
+          args: --current --strip header
+        env:
+          OUTPUT: CHANGES.md
+
+      - uses: docker/setup-buildx-action@v3
+
+      # BSL product: push to Forgejo registry only.
+      # GHCR push is deferred pending license-gate-at-startup implementation (Circuit-Forge/snipe#3).
+      - uses: docker/login-action@v3
+        with:
+          registry: git.opensourcesolarpunk.com
+          username: ${{ gitea.actor }}
+          password: ${{ secrets.FORGEJO_RELEASE_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/api/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            git.opensourcesolarpunk.com/circuit-forge/snipe-api:${{ gitea.ref_name }}
+            git.opensourcesolarpunk.com/circuit-forge/snipe-api:latest
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/web/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            git.opensourcesolarpunk.com/circuit-forge/snipe-web:${{ gitea.ref_name }}
+            git.opensourcesolarpunk.com/circuit-forge/snipe-web:latest
+
+      - name: Create Forgejo release
+        env:
+          FORGEJO_RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN }}
+          TAG: ${{ gitea.ref_name }}
+        run: |
+          body=$(cat CHANGES.md | python3 -c "import sys, json; print(json.dumps(sys.stdin.read()))")
+          curl -sf -X POST \
+            "https://git.opensourcesolarpunk.com/api/v1/repos/Circuit-Forge/snipe/releases" \
+            -H "Authorization: token ${FORGEJO_RELEASE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"${TAG}\", \"name\": \"${TAG}\", \"body\": ${body}}"

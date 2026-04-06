@@ -14,7 +14,8 @@ Intentionally ungated (free for all):
   - saved_searches          — retention feature; friction cost outweighs gate value
 """
 from __future__ import annotations
-from circuitforge_core.tiers import can_use as _core_can_use, TIERS  # noqa: F401
+
+from circuitforge_core.tiers import can_use as _core_can_use  # noqa: F401
 
 # Feature key → minimum tier required.
 FEATURES: dict[str, str] = {

@@ -16,8 +16,6 @@ FastAPI usage:
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import os
 import re
@@ -77,7 +75,6 @@ def compute_features(tier: str) -> SessionFeatures:
     """Compute feature flags from tier. Evaluated server-side; sent to frontend."""
     local = tier == "local"
     paid_plus = local or tier in ("paid", "premium", "ultra")
-    premium_plus = local or tier in ("premium", "ultra")
 
     return SessionFeatures(
         saved_searches=True,  # all tiers get saved searches

@@ -16,7 +16,7 @@ import json
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -302,7 +302,8 @@ class ScrapedEbayAdapter(PlatformAdapter):
 
         time.sleep(self._delay)
 
-        import subprocess, os
+        import os
+        import subprocess
         display_num = next(_display_counter)
         display = f":{display_num}"
         xvfb = subprocess.Popen(
@@ -313,8 +314,10 @@ class ScrapedEbayAdapter(PlatformAdapter):
         env["DISPLAY"] = display
 
         try:
-            from playwright.sync_api import sync_playwright  # noqa: PLC0415 — lazy: only needed in Docker
-            from playwright_stealth import Stealth            # noqa: PLC0415
+            from playwright.sync_api import (
+                sync_playwright,  # noqa: PLC0415 — lazy: only needed in Docker
+            )
+            from playwright_stealth import Stealth  # noqa: PLC0415
 
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(

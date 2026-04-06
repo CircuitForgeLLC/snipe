@@ -1,9 +1,12 @@
 """Build dynamic filter options from a result set and render the Streamlit sidebar."""
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from typing import Optional
+
 import streamlit as st
+
 from app.db.models import Listing, TrustScore
 
 

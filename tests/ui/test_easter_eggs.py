@@ -4,10 +4,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from app.db.models import Listing, TrustScore
-from app.ui.components.easter_eggs import is_steal, auction_hours_remaining
+from app.ui.components.easter_eggs import auction_hours_remaining, is_steal
 
 
 def _listing(**kwargs) -> Listing:
