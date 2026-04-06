@@ -1,7 +1,7 @@
 -- Staging DB: persistent listing tracking across searches.
 -- Adds temporal metadata to listings so we can detect stale/repriced/recurring items.
 
-ALTER TABLE listings ADD COLUMN first_seen_at TEXT;
+-- first_seen_at already defined in 001_init.sql CREATE TABLE; skip to avoid duplicate column error on fresh installs
 ALTER TABLE listings ADD COLUMN last_seen_at  TEXT;
 ALTER TABLE listings ADD COLUMN times_seen    INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE listings ADD COLUMN price_at_first_seen REAL;
