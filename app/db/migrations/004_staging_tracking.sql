@@ -1,12 +1,10 @@
 -- Staging DB: persistent listing tracking across searches.
 -- Adds temporal metadata to listings so we can detect stale/repriced/recurring items.
 
--- IF NOT EXISTS (SQLite 3.35+, Python 3.11 ships 3.39+) makes this safe to re-run
--- in any state: fresh install, partial-failure recovery, or already-applied.
-ALTER TABLE listings ADD COLUMN IF NOT EXISTS first_seen_at       TEXT;
-ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_seen_at        TEXT;
-ALTER TABLE listings ADD COLUMN IF NOT EXISTS times_seen          INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE listings ADD COLUMN IF NOT EXISTS price_at_first_seen REAL;
+ALTER TABLE listings ADD COLUMN first_seen_at       TEXT;
+ALTER TABLE listings ADD COLUMN last_seen_at        TEXT;
+ALTER TABLE listings ADD COLUMN times_seen          INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE listings ADD COLUMN price_at_first_seen REAL;
 
 -- Backfill existing rows so columns are non-null where we have data
 UPDATE listings SET
