@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from circuitforge_core.config import load_env
 from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
+from circuitforge_core.api.feedback import make_feedback_router as _make_feedback_router
 from app.db.store import Store
 from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
@@ -75,8 +76,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from circuitforge_core.api.feedback import make_feedback_router as _make_feedback_router  # noqa: E402
 
 _feedback_router = _make_feedback_router(
     repo="Circuit-Forge/snipe",
