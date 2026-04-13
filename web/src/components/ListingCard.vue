@@ -128,6 +128,12 @@
         >⚑</button>
       </div>
 
+      <!-- Trust feedback: calm "looks right / wrong" signal buttons -->
+      <TrustFeedbackButtons
+        :seller-id="`ebay::${listing.seller_platform_id}`"
+        :trust="trust"
+      />
+
       <!-- Price -->
       <div class="card__price-wrap">
         <span
@@ -152,6 +158,7 @@ import { computed, ref } from 'vue'
 import type { Listing, TrustScore, Seller } from '../stores/search'
 import { useSearchStore } from '../stores/search'
 import { useBlocklistStore } from '../stores/blocklist'
+import TrustFeedbackButtons from './TrustFeedbackButtons.vue'
 
 const props = defineProps<{
   listing: Listing
