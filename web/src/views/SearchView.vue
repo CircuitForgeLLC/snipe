@@ -444,7 +444,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { MagnifyingGlassIcon, ExclamationTriangleIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import { useSearchStore } from '../stores/search'
@@ -622,6 +622,18 @@ const DEFAULT_FILTERS: SearchFilters = {
 }
 
 const filters = reactive<SearchFilters>({ ...DEFAULT_FILTERS })
+
+// Sync LLM-populated store state into the sidebar reactive and search bar.
+// One-way only: store → view. User edits in the sidebar stay local.
+watch(
+  () => store.filters,
+  (newFilters) => { Object.assign(filters, newFilters) },
+  { deep: true },
+)
+watch(
+  () => store.query,
+  (q) => { if (q) queryInput.value = q },
+)
 
 function resetFilters() {
   Object.assign(filters, DEFAULT_FILTERS)
