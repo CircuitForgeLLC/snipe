@@ -26,6 +26,7 @@ FEATURES: dict[str, str] = {
     "reverse_image_search":      "paid",
     "ebay_oauth":                "paid",   # full trust scores via eBay Trading API
     "background_monitoring":     "paid",   # limited at Paid; see LIMITS below
+    "llm_query_builder":         "paid",   # inline natural-language → filter translator
 
     # Premium tier
     "auto_bidding":              "premium",
