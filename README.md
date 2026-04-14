@@ -4,6 +4,8 @@
 
 **Status:** Active — eBay listing intelligence MVP complete (search, trust scoring, affiliate links, feedback FAB, vision task scheduling). Auction sniping engine and multi-platform support are next.
 
+**[Documentation](https://docs.circuitforge.tech/snipe/)** · [circuitforge.tech](https://circuitforge.tech)
+
 ## Quick install (self-hosted)
 
 **Requirements:** Docker with Compose plugin, Git. No API keys needed to get started.
@@ -59,6 +61,21 @@ Before you bid, Snipe tells you whether a listing is worth your time. It fetches
 Snipe manages the bid itself: monitors listings across platforms, schedules last-second bids, handles soft-close extensions, and guides you through the post-win logistics (payment routing, shipping coordination, provenance documentation for antiques).
 
 The name is the origin of the word "sniping" — common snipes are notoriously elusive birds, secretive and camouflaged, that flush suddenly from cover. Shooting one required extreme patience, stillness, and a precise last-second shot. That's the auction strategy.
+
+---
+
+## Screenshots
+
+**Landing page — no account required**
+![Snipe landing hero showing search bar and three feature tiles: Seller trust score, Price vs. market, Red flag detection](docs/screenshots/01-hero.png)
+
+**Search results with trust scores**
+![Search results for vintage film camera listings, each card showing a trust score badge, seller feedback, price, and market comparison](docs/screenshots/02-results.png)
+
+**STEAL badge — price significantly below market**
+![Listing cards with STEAL badge highlighting listings priced well below completed sales median](docs/screenshots/03-steal-badge.png)
+
+> Red flag and Triple Red screenshots coming — captured opportunistically from real scammy listings.
 
 ---
 
