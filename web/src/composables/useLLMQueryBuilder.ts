@@ -4,7 +4,7 @@
  * State and API call logic for the LLM query builder panel.
  */
 import { ref } from 'vue'
-import { useSearchStore, type SearchParamsResult } from '@/stores/search'
+import { useSearchStore, type SearchParamsResult } from '../stores/search'
 
 export type BuildStatus = 'idle' | 'thinking' | 'done' | 'error'
 
@@ -64,7 +64,7 @@ export function useLLMQueryBuilder() {
       status.value = 'done'
 
       if (autoRun.value) {
-        await store.search(params.base_query, store.filters.value)
+        await store.search(params.base_query, store.filters)
       }
 
       return params

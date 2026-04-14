@@ -83,7 +83,7 @@
 
 <script setup lang="ts">
 import { ref, nextTick, watch } from 'vue'
-import { useLLMQueryBuilder } from '@/composables/useLLMQueryBuilder'
+import { useLLMQueryBuilder } from '../composables/useLLMQueryBuilder'
 
 const {
   isOpen,
