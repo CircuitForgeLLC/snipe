@@ -120,17 +120,50 @@ class EbayCategoryCache:
     def refresh(
         self,
         token_manager: Optional["EbayTokenManager"] = None,
+        community_store: Optional[object] = None,
     ) -> int:
         """Fetch the eBay category tree and upsert leaf nodes into SQLite.
 
         Args:
             token_manager: An `EbayTokenManager` instance for the Taxonomy API.
                 If None, falls back to seeding the hardcoded bootstrap table.
+            community_store: Optional SnipeCommunityStore instance.
+                If provided and token_manager is set, publish leaves after a successful
+                Taxonomy API fetch.
+                If provided and token_manager is None, fetch from community before
+                falling back to the hardcoded bootstrap (requires >= 10 rows).
 
         Returns:
             Number of leaf categories stored.
         """
         if token_manager is None:
+            # Try community store first
+            if community_store is not None:
+                try:
+                    community_cats = community_store.fetch_categories()
+                    if len(community_cats) >= 10:
+                        now = datetime.now(timezone.utc).isoformat()
+                        self._conn.executemany(
+                            "INSERT OR REPLACE INTO ebay_categories"
+                            " (category_id, name, full_path, is_leaf, refreshed_at)"
+                            " VALUES (?, ?, ?, 1, ?)",
+                            [(cid, name, path, now) for cid, name, path in community_cats],
+                        )
+                        self._conn.commit()
+                        log.info(
+                            "EbayCategoryCache: loaded %d categories from community store.",
+                            len(community_cats),
+                        )
+                        return len(community_cats)
+                    log.info(
+                        "EbayCategoryCache: community store has %d categories (< 10) — falling back to bootstrap.",
+                        len(community_cats),
+                    )
+                except Exception:
+                    log.warning(
+                        "EbayCategoryCache: community store fetch failed — falling back to bootstrap.",
+                        exc_info=True,
+                    )
             self._seed_bootstrap()
             cur = self._conn.execute("SELECT COUNT(*) FROM ebay_categories")
             return cur.fetchone()[0]
@@ -173,6 +206,17 @@ class EbayCategoryCache:
                 "EbayCategoryCache: refreshed %d leaf categories from eBay Taxonomy API.",
                 len(leaves),
             )
+
+            # Publish to community store if available
+            if community_store is not None:
+                try:
+                    community_store.publish_categories(leaves)
+                except Exception:
+                    log.warning(
+                        "EbayCategoryCache: failed to publish categories to community store.",
+                        exc_info=True,
+                    )
+
             return len(leaves)
 
         except Exception:

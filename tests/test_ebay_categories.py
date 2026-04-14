@@ -162,3 +162,57 @@ def test_refresh_api_error_logs_warning(db, caplog):
 
     # Falls back to bootstrap on API error
     assert count >= BOOTSTRAP_MIN
+
+
+def test_refresh_publishes_to_community_when_creds_available(db):
+    """After a successful Taxonomy API refresh, categories are published to community store."""
+    mock_tm = MagicMock()
+    mock_tm.get_token.return_value = "fake-token"
+
+    id_resp = MagicMock()
+    id_resp.raise_for_status = MagicMock()
+    id_resp.json.return_value = {"categoryTreeId": "0"}
+
+    tree_resp = MagicMock()
+    tree_resp.raise_for_status = MagicMock()
+    tree_resp.json.return_value = _make_tree_response()
+
+    mock_community = MagicMock()
+    mock_community.publish_categories.return_value = 2
+
+    with patch("app.platforms.ebay.categories.requests.get") as mock_get:
+        mock_get.side_effect = [id_resp, tree_resp]
+        cache = EbayCategoryCache(db)
+        cache.refresh(mock_tm, community_store=mock_community)
+
+    mock_community.publish_categories.assert_called_once()
+    published = mock_community.publish_categories.call_args[0][0]
+    assert len(published) == 2
+
+
+def test_refresh_fetches_from_community_when_no_creds(db):
+    """Without creds, community categories are used when available (>= 10 rows)."""
+    mock_community = MagicMock()
+    mock_community.fetch_categories.return_value = [
+        (str(i), f"Cat {i}", f"Path > Cat {i}") for i in range(15)
+    ]
+
+    cache = EbayCategoryCache(db)
+    count = cache.refresh(token_manager=None, community_store=mock_community)
+
+    assert count == 15
+    cur = db.execute("SELECT COUNT(*) FROM ebay_categories")
+    assert cur.fetchone()[0] == 15
+
+
+def test_refresh_falls_back_to_bootstrap_when_community_sparse(db):
+    """Falls back to bootstrap if community returns fewer than 10 rows."""
+    mock_community = MagicMock()
+    mock_community.fetch_categories.return_value = [
+        ("1", "Only One", "Path > Only One")
+    ]
+
+    cache = EbayCategoryCache(db)
+    count = cache.refresh(token_manager=None, community_store=mock_community)
+
+    assert count >= BOOTSTRAP_MIN
