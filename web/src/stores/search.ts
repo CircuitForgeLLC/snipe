@@ -61,6 +61,18 @@ export interface SavedSearch {
   last_run_at: string | null
 }
 
+export interface SearchParamsResult {
+  base_query: string
+  must_include_mode: string
+  must_include: string
+  must_exclude: string
+  max_price: number | null
+  min_price: number | null
+  condition: string[]
+  category_id: string | null
+  explanation: string
+}
+
 export interface SearchFilters {
   minTrustScore?: number
   minPrice?: number
@@ -120,6 +132,7 @@ export const useSearchStore = defineStore('search', () => {
   )
   const marketPrice = ref<number | null>(cached?.marketPrice ?? null)
   const adapterUsed = ref<'api' | 'scraper' | null>(cached?.adapterUsed ?? null)
+  const filters = ref<SearchFilters>({})
   const affiliateActive = ref<boolean>(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -281,6 +294,21 @@ export const useSearchStore = defineStore('search', () => {
     error.value = null
   }
 
+  function populateFromLLM(params: SearchParamsResult) {
+    query.value = params.base_query
+    const mode = params.must_include_mode as MustIncludeMode
+    filters.value = {
+      ...filters.value,
+      mustInclude: params.must_include,
+      mustIncludeMode: mode,
+      mustExclude: params.must_exclude,
+      maxPrice: params.max_price ?? undefined,
+      minPrice: params.min_price ?? undefined,
+      conditions: params.condition.length > 0 ? params.condition : undefined,
+      categoryId: params.category_id ?? undefined,
+    }
+  }
+
   return {
     query,
     results,
@@ -292,10 +320,12 @@ export const useSearchStore = defineStore('search', () => {
     loading,
     enriching,
     error,
+    filters,
     search,
     cancelSearch,
     enrichSeller,
     closeUpdates,
     clearResults,
+    populateFromLLM,
   }
 })
