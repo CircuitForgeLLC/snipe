@@ -1,8 +1,9 @@
-import pytest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
+import pytest
+
+from app.db.models import Listing, MarketComp, Seller
 from app.db.store import Store
-from app.db.models import Listing, Seller, TrustScore, MarketComp
 
 
 @pytest.fixture

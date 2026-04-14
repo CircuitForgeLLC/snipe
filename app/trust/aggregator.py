@@ -1,8 +1,10 @@
 """Composite score and red flag extraction."""
 from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
+
 from app.db.models import Seller, TrustScore
 
 HARD_FILTER_AGE_DAYS = 7

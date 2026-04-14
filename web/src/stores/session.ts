@@ -33,6 +33,11 @@ export const useSessionStore = defineStore('session', () => {
   const isCloud = computed(() => tier.value !== 'local')
   const isFree = computed(() => tier.value === 'free')
   const isPaid = computed(() => ['paid', 'premium', 'ultra', 'local'].includes(tier.value))
+  const isPremium = computed(() => ['premium', 'ultra'].includes(tier.value))
+  // isGuest: transient visitor with a snipe_guest UUID but no Heimdall account
+  const isGuest = computed(() => userId.value.startsWith('guest:'))
+  // isLoggedIn: cloud user with a real account (not anonymous or guest)
+  const isLoggedIn = computed(() => isCloud.value && userId.value !== 'anonymous' && !isGuest.value)
 
   async function bootstrap() {
     try {
@@ -49,5 +54,5 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  return { userId, tier, features, loaded, isCloud, isFree, isPaid, bootstrap }
+  return { userId, tier, features, loaded, isCloud, isFree, isPaid, isPremium, isGuest, isLoggedIn, bootstrap }
 })

@@ -1,8 +1,11 @@
 """Snipe FastAPI — search endpoint wired to ScrapedEbayAdapter + TrustScorer."""
 from __future__ import annotations
 
+import asyncio
+import csv
 import dataclasses
 import hashlib
+import io
 import json as _json
 import logging
 import os
@@ -11,29 +14,27 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
-import asyncio
-import csv
-import io
-
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-
-from circuitforge_core.config import load_env
 from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from circuitforge_core.api import make_feedback_router as _make_feedback_router
+from circuitforge_core.config import load_env
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from api.cloud_session import CloudUser, compute_features, get_session
+from api.ebay_webhook import router as ebay_webhook_router
+from app.db.models import SavedSearch as SavedSearchModel
+from app.db.models import ScammerEntry
 from app.db.store import Store
-from app.db.models import SavedSearch as SavedSearchModel, ScammerEntry
 from app.platforms import SearchFilters
-from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.platforms.ebay.adapter import EbayAdapter
 from app.platforms.ebay.auth import EbayTokenManager
 from app.platforms.ebay.query_builder import expand_queries, parse_groups
+from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.trust import TrustScorer
-from api.cloud_session import CloudUser, compute_features, get_session
-from api.ebay_webhook import router as ebay_webhook_router
 
 load_env(Path(".env"))
 log = logging.getLogger(__name__)
@@ -50,8 +51,8 @@ async def _lifespan(app: FastAPI):
     # Start vision/LLM background task scheduler.
     # background_tasks queue lives in shared_db (cloud) or local_db (local)
     # so the scheduler has a single stable DB path across all cloud users.
+    from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
     from app.tasks.scheduler import get_scheduler, reset_scheduler
-    from api.cloud_session import CLOUD_MODE, _LOCAL_SNIPE_DB, _shared_db_path
     sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     get_scheduler(sched_db)
     log.info("Snipe task scheduler started (db=%s)", sched_db)
@@ -100,13 +101,33 @@ def health():
 
 
 @app.get("/api/session")
-def session_info(session: CloudUser = Depends(get_session)):
+def session_info(response: Response, session: CloudUser = Depends(get_session)):
     """Return the current session tier and computed feature flags.
 
     Used by the Vue frontend to gate UI features (pages slider cap,
     saved search limits, shared DB badges, etc.) without hardcoding
     tier logic client-side.
+
+    For anonymous visitors: issues a snipe_guest UUID cookie (24h TTL) so
+    the user gets a stable identity for the session without requiring an account.
     """
+    from api.cloud_session import CLOUD_MODE
+    if CLOUD_MODE and session.user_id == "anonymous":
+        guest_uuid = str(uuid.uuid4())
+        response.set_cookie(
+            key="snipe_guest",
+            value=guest_uuid,
+            max_age=86400,
+            samesite="lax",
+            httponly=False,
+            path="/snipe",
+        )
+        session = CloudUser(
+            user_id=f"guest:{guest_uuid}",
+            tier="free",
+            shared_db=session.shared_db,
+            user_db=session.user_db,
+        )
     features = compute_features(session.tier)
     return {
         "user_id": session.user_id,
@@ -245,9 +266,10 @@ def _enqueue_vision_tasks(
                        trust_scores table in cloud mode.
     """
     import json as _json
+
+    from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
     from app.tasks.runner import insert_task
     from app.tasks.scheduler import get_scheduler
-    from api.cloud_session import CLOUD_MODE, _shared_db_path, _LOCAL_SNIPE_DB
 
     sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     sched = get_scheduler(sched_db)
@@ -323,8 +345,8 @@ def _adapter_name(force: str = "auto") -> str:
 @app.get("/api/search")
 def search(
     q: str = "",
-    max_price: float = 0,
-    min_price: float = 0,
+    max_price: Optional[float] = None,
+    min_price: Optional[float] = None,
     pages: int = 1,
     must_include: str = "",        # raw filter string; client-side always applied
     must_include_mode: str = "all", # "all" | "any" | "groups" — drives eBay expansion
@@ -350,9 +372,22 @@ def search(
     else:
         ebay_queries = [q]
 
+    # Comp query: completed-sales lookup uses an enriched query so the market
+    # median reflects the same filtered universe the user is looking at.
+    #   "all" mode  → append must_include terms to eBay completed-sales query
+    #   "groups"    → use first expanded query (most specific variant)
+    #   "any" / no filter → base query (can't enforce optional terms)
+    if must_include_mode == "groups" and len(ebay_queries) > 0:
+        comp_query = ebay_queries[0]
+    elif must_include_mode == "all" and must_include.strip():
+        extra = " ".join(_parse_terms(must_include))
+        comp_query = f"{q} {extra}".strip()
+    else:
+        comp_query = q
+
     base_filters = SearchFilters(
-        max_price=max_price if max_price > 0 else None,
-        min_price=min_price if min_price > 0 else None,
+        max_price=max_price if max_price and max_price > 0 else None,
+        min_price=min_price if min_price and min_price > 0 else None,
         pages=pages,
         must_exclude=must_exclude_terms,  # forwarded to eBay -term by the scraper
         category_id=category_id.strip() or None,
@@ -369,9 +404,9 @@ def search(
 
     def _run_comps() -> None:
         try:
-            _make_adapter(Store(shared_db), adapter).get_completed_sales(q, pages)
+            _make_adapter(Store(shared_db), adapter).get_completed_sales(comp_query, pages)
         except Exception:
-            log.warning("comps: unhandled exception for %r", q, exc_info=True)
+            log.warning("comps: unhandled exception for %r", comp_query, exc_info=True)
 
     try:
         # Comps submitted first — guarantees an immediate worker slot even at max concurrency.
@@ -426,7 +461,7 @@ def search(
     _update_queues[session_id] = _queue.SimpleQueue()
     _trigger_scraper_enrichment(
         listings, shared_store, shared_db,
-        user_db=user_db, query=q, session_id=session_id,
+        user_db=user_db, query=comp_query, session_id=session_id,
     )
 
     scorer = TrustScorer(shared_store)
@@ -440,7 +475,7 @@ def search(
     if features.photo_analysis:
         _enqueue_vision_tasks(listings, trust_scores_list, session)
 
-    query_hash = hashlib.md5(q.encode()).hexdigest()
+    query_hash = hashlib.md5(comp_query.encode()).hexdigest()
     comp = shared_store.get_market_comp("ebay", query_hash)
     market_price = comp.median_price if comp else None
 
@@ -459,9 +494,22 @@ def search(
         and shared_store.get_seller("ebay", listing.seller_platform_id)
     }
 
+    # Build a preference reader for affiliate URL wrapping.
+    # Anonymous and guest users always use env-var mode: no opt-out or BYOK lookup.
+    _is_unauthed = session.user_id == "anonymous" or session.user_id.startswith("guest:")
+    _pref_store = None if _is_unauthed else user_store
+
+    def _get_pref(uid: Optional[str], path: str, default=None):
+        return _pref_store.get_user_preference(path, default=default)  # type: ignore[union-attr]
+
     def _serialize_listing(l: object) -> dict:
         d = dataclasses.asdict(l)
-        d["url"] = _wrap_affiliate_url(d["url"], retailer="ebay")
+        d["url"] = _wrap_affiliate_url(
+            d["url"],
+            retailer="ebay",
+            user_id=None if _is_unauthed else session.user_id,
+            get_preference=_get_pref if _pref_store is not None else None,
+        )
         return d
 
     return {
@@ -683,6 +731,19 @@ def mark_saved_search_run(saved_id: int, session: CloudUser = Depends(get_sessio
     return {"ok": True}
 
 
+# ── Community Trust Signals ───────────────────────────────────────────────────
+# Signals live in shared_db so feedback aggregates across all users.
+
+class CommunitySignal(BaseModel):
+    seller_id: str
+    confirmed: bool  # True = "score looks right", False = "score is wrong"
+
+
+@app.post("/api/community/signal", status_code=204)
+def community_signal(body: CommunitySignal, session: CloudUser = Depends(get_session)):
+    Store(session.shared_db).save_community_signal(body.seller_id, body.confirmed)
+
+
 # ── Scammer Blocklist ─────────────────────────────────────────────────────────
 # Blocklist lives in shared_db: all users on a shared cloud instance see the
 # same community blocklist. In local (single-user) mode shared_db == user_db.
@@ -702,6 +763,11 @@ def list_blocklist(session: CloudUser = Depends(get_session)):
 
 @app.post("/api/blocklist", status_code=201)
 def add_to_blocklist(body: BlocklistAdd, session: CloudUser = Depends(get_session)):
+    if session.user_id in ("anonymous",) or session.user_id.startswith("guest:"):
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in to report sellers to the community blocklist.",
+        )
     store = Store(session.shared_db)
     entry = store.add_to_blocklist(ScammerEntry(
         platform=body.platform,
@@ -742,6 +808,11 @@ async def import_blocklist(
     session: CloudUser = Depends(get_session),
 ):
     """Import a CSV blocklist. Columns: platform_seller_id, username, reason (optional)."""
+    if session.user_id == "anonymous":
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in to import a blocklist.",
+        )
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")  # handle BOM from Excel exports
@@ -773,5 +844,51 @@ async def import_blocklist(
 
     log.info("Blocklist import: %d added, %d errors", imported, len(errors))
     return {"imported": imported, "errors": errors}
+
+
+# ── User Preferences ──────────────────────────────────────────────────────────
+
+class PreferenceUpdate(BaseModel):
+    path: str   # dot-separated, e.g. "affiliate.opt_out" or "affiliate.byok_ids.ebay"
+    value: Optional[object]  # bool, str, or None to clear
+
+
+@app.get("/api/preferences")
+def get_preferences(session: CloudUser = Depends(get_session)) -> dict:
+    """Return all preferences for the authenticated user.
+
+    Anonymous users always receive an empty dict (no preferences to store).
+    """
+    if session.user_id == "anonymous":
+        return {}
+    store = Store(session.user_db)
+    return store.get_all_preferences()
+
+
+@app.patch("/api/preferences")
+def patch_preference(
+    body: PreferenceUpdate,
+    session: CloudUser = Depends(get_session),
+) -> dict:
+    """Set a single preference at *path* to *value*.
+
+    - ``affiliate.opt_out`` — available to all signed-in users.
+    - ``affiliate.byok_ids.ebay`` — Premium tier only.
+
+    Returns the full updated preferences dict.
+    """
+    if session.user_id == "anonymous":
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in to save preferences.",
+        )
+    if body.path.startswith("affiliate.byok_ids.") and session.tier not in ("premium", "ultra"):
+        raise HTTPException(
+            status_code=403,
+            detail="Custom affiliate IDs (BYOK) require a Premium subscription.",
+        )
+    store = Store(session.user_db)
+    store.set_user_preference(body.path, body.value)
+    return store.get_all_preferences()
 
 

@@ -40,15 +40,24 @@
             v-if="store.loading"
             type="button"
             class="cancel-btn"
+            aria-label="Cancel search"
             @click="store.cancelSearch()"
-            title="Cancel search"
           >✕ Cancel</button>
+          <a
+            v-else-if="session.isCloud && !session.isLoggedIn"
+            href="https://circuitforge.tech/login"
+            class="save-bookmark-btn"
+            aria-label="Sign in to save searches"
+          >
+            <BookmarkIcon class="search-btn-icon" aria-hidden="true" />
+          </a>
           <button
             v-else
             type="button"
             class="save-bookmark-btn"
             :disabled="!queryInput.trim()"
-            :title="showSaveForm ? 'Cancel' : 'Save this search'"
+            :aria-label="showSaveForm ? 'Cancel saving search' : 'Save this search'"
+            :aria-pressed="showSaveForm"
             @click="showSaveForm = !showSaveForm; if (showSaveForm) saveName = queryInput.trim()"
           >
             <BookmarkIcon class="search-btn-icon" aria-hidden="true" />
@@ -64,7 +73,7 @@
           autofocus
         />
         <button type="submit" class="save-confirm-btn">Save</button>
-        <button type="button" class="save-cancel-btn" @click="showSaveForm = false">✕</button>
+        <button type="button" class="save-cancel-btn" aria-label="Cancel save" @click="showSaveForm = false">✕</button>
         <span v-if="saveSuccess" class="save-success">Saved!</span>
         <span v-if="saveError" class="save-error">{{ saveError }}</span>
       </form>
@@ -125,6 +134,7 @@
               type="button"
               class="filter-pages-btn"
               :class="{ 'filter-pages-btn--active': filters.adapter === m.value }"
+              :aria-pressed="filters.adapter === m.value"
               @click="filters.adapter = m.value"
             >{{ m.label }}</button>
           </div>
@@ -144,7 +154,8 @@
                 'filter-pages-btn--locked': p > session.features.max_pages,
               }"
               :disabled="p > session.features.max_pages"
-              :title="p > session.features.max_pages ? 'Upgrade to fetch more pages' : undefined"
+              :aria-pressed="filters.pages === p"
+              :aria-label="p > session.features.max_pages ? `${p} pages — upgrade required` : `${p} page${p > 1 ? 's' : ''}`"
               @click="p <= session.features.max_pages && (filters.pages = p)"
             >{{ p }}</button>
           </div>
@@ -154,8 +165,10 @@
         <fieldset class="filter-group">
           <legend class="filter-label">Price range</legend>
           <div class="filter-row">
-            <input v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" />
-            <input v-model.number="filters.maxPrice" type="number" min="0" class="filter-input" placeholder="Max $" />
+            <label class="sr-only" for="f-min-price">Minimum price</label>
+            <input id="f-min-price" v-model.number="filters.minPrice" type="number" min="0" class="filter-input" placeholder="Min $" aria-label="Minimum price in dollars" />
+            <label class="sr-only" for="f-max-price">Maximum price</label>
+            <input id="f-max-price" v-model.number="filters.maxPrice" type="number" min="0" class="filter-input" placeholder="Max $" aria-label="Maximum price in dollars" />
           </div>
           <p class="filter-pages-hint">Forwarded to eBay API</p>
         </fieldset>
@@ -164,13 +177,14 @@
           <legend class="filter-label">Keywords</legend>
           <div class="filter-row">
             <label class="filter-label-sm" for="f-include">Must include</label>
-            <div class="filter-mode-row">
+            <div class="filter-mode-row" role="group" aria-label="Keyword match mode">
               <button
                 v-for="m in INCLUDE_MODES"
                 :key="m.value"
                 type="button"
                 class="filter-pages-btn"
                 :class="{ 'filter-pages-btn--active': filters.mustIncludeMode === m.value }"
+                :aria-pressed="filters.mustIncludeMode === m.value"
                 @click="filters.mustIncludeMode = m.value"
               >{{ m.label }}</button>
             </div>
@@ -217,9 +231,11 @@
             max="100"
             step="5"
             class="filter-range"
+            aria-label="Minimum trust score"
             aria-valuemin="0"
             aria-valuemax="100"
             :aria-valuenow="filters.minTrustScore"
+            :aria-valuetext="`${filters.minTrustScore ?? 0} out of 100`"
           />
           <span class="filter-range-val">{{ filters.minTrustScore ?? 0 }}</span>
         </fieldset>
@@ -287,15 +303,59 @@
           {{ store.error }}
         </div>
 
-        <!-- Empty state (before first search) -->
-        <div v-else-if="!store.results.length && !store.loading && !store.query" class="results-empty">
-          <span class="results-empty-icon" aria-hidden="true">🎯</span>
-          <p>Enter a search term to find listings.</p>
+        <!-- Landing hero (before first search) -->
+        <div v-else-if="!store.results.length && !store.loading && !store.query" class="landing-hero">
+          <div class="landing-hero__eyebrow" aria-hidden="true">🎯 Snipe</div>
+          <h1 class="landing-hero__headline">Bid with confidence.</h1>
+          <p class="landing-hero__sub">
+            Snipe scores eBay listings and sellers for trustworthiness before you place a bid.
+            Catches new accounts, suspicious prices, duplicate photos, and known scammers.
+            Free. No account required.
+          </p>
+
+          <!-- Timely callout: eBay cancellation policy change -->
+          <div v-if="showEbayCallout" class="landing-hero__callout" role="note">
+            <span class="landing-hero__callout-icon" aria-hidden="true">⚠</span>
+            <p>
+              <strong>Starting May 13, 2026, eBay removes the option for buyers to cancel winning bids.</strong>
+              Auction sales become final. Know what you're buying before you bid.
+            </p>
+          </div>
+
+          <!-- Signal tiles -->
+          <div class="landing-hero__tiles" role="list">
+            <div class="landing-hero__tile" role="listitem">
+              <span class="landing-hero__tile-icon" aria-hidden="true">🛡</span>
+              <strong class="landing-hero__tile-title">Seller trust score</strong>
+              <p class="landing-hero__tile-desc">Feedback count and ratio, account age, and category history — scored 0 to 100.</p>
+            </div>
+            <div class="landing-hero__tile" role="listitem">
+              <span class="landing-hero__tile-icon" aria-hidden="true">📊</span>
+              <strong class="landing-hero__tile-title">Price vs. market</strong>
+              <p class="landing-hero__tile-desc">Compared against recent completed sales. Flags prices that are suspiciously below market.</p>
+            </div>
+            <div class="landing-hero__tile" role="listitem">
+              <span class="landing-hero__tile-icon" aria-hidden="true">🚩</span>
+              <strong class="landing-hero__tile-title">Red flag detection</strong>
+              <p class="landing-hero__tile-desc">Duplicate photos, damage mentions, established bad actors, and zero-feedback sellers.</p>
+            </div>
+          </div>
+
+          <!-- Sign-in unlock strip (cloud, unauthenticated only) -->
+          <div v-if="session.isCloud && !session.isLoggedIn" class="landing-hero__signin-strip">
+            <p class="landing-hero__signin-text">
+              Free account unlocks saved searches, more results pages, and the community scammer blocklist.
+            </p>
+            <a href="https://circuitforge.tech/login" class="landing-hero__signin-cta">
+              Create a free account →
+            </a>
+          </div>
         </div>
 
         <!-- No results -->
         <div v-else-if="!store.results.length && !store.loading && store.query" class="results-empty">
           <p>No listings found for <strong>{{ store.query }}</strong>.</p>
+          <p class="results-empty__hint">Try a broader search term, or check spelling.</p>
         </div>
 
         <!-- Results -->
@@ -326,6 +386,40 @@
             </div>
           </div>
 
+          <!-- Guest prompt — sign-in CTA for gated bulk actions -->
+          <Transition name="bulk-bar">
+            <div v-if="guestPrompt" class="guest-prompt" role="alert">
+              <span>{{ guestPrompt }}</span>
+              <a href="https://circuitforge.tech/login" class="guest-prompt__link">Sign in free →</a>
+              <button class="guest-prompt__dismiss" @click="guestPrompt = null" aria-label="Dismiss">✕</button>
+            </div>
+          </Transition>
+
+          <!-- Bulk action bar — appears when any cards are selected -->
+          <Transition name="bulk-bar">
+            <div v-if="selectMode" class="bulk-bar" role="toolbar" aria-label="Bulk actions">
+              <span class="bulk-bar__count">{{ selectedIds.size }} selected</span>
+              <button class="bulk-bar__btn bulk-bar__btn--ghost" @click="selectAll">Select all</button>
+              <button class="bulk-bar__btn bulk-bar__btn--ghost" @click="clearSelection">Deselect</button>
+              <div class="bulk-bar__sep" role="separator" />
+              <button
+                class="bulk-bar__btn bulk-bar__btn--danger"
+                :disabled="bulkBlocking"
+                @click="blockSelected"
+                :title="session.isLoggedIn ? 'Block all selected sellers' : 'Sign in to block sellers'"
+              >
+                {{ bulkBlocking ? `Blocking… (${bulkBlockDone})` : session.isLoggedIn ? '⚑ Block sellers' : '⚑ Sign in to block' }}
+              </button>
+              <button
+                class="bulk-bar__btn bulk-bar__btn--report"
+                @click="reportSelected"
+                title="Report selected sellers to eBay"
+              >
+                ⚐ Report to eBay
+              </button>
+            </div>
+          </Transition>
+
           <!-- Cards -->
           <div class="results-list">
             <ListingCard
@@ -335,6 +429,9 @@
               :trust="store.trustScores.get(listing.platform_listing_id) ?? null"
               :seller="store.sellers.get(listing.seller_platform_id) ?? null"
               :market-price="store.marketPrice"
+              :selected="selectedIds.has(listing.platform_listing_id)"
+              :select-mode="selectMode"
+              @toggle="toggleSelect(listing.platform_listing_id)"
             />
           </div>
         </template>
@@ -351,13 +448,88 @@ import { useSearchStore } from '../stores/search'
 import type { Listing, TrustScore, SearchFilters, MustIncludeMode } from '../stores/search'
 import { useSavedSearchesStore } from '../stores/savedSearches'
 import { useSessionStore } from '../stores/session'
+import { useBlocklistStore } from '../stores/blocklist'
 import ListingCard from '../components/ListingCard.vue'
 
 const route = useRoute()
 const store = useSearchStore()
 const savedStore = useSavedSearchesStore()
 const session = useSessionStore()
+const blocklist = useBlocklistStore()
 const queryInput = ref('')
+
+// ── Multi-select + bulk actions ───────────────────────────────────────────────
+const selectedIds = ref<Set<string>>(new Set())
+const selectMode = computed(() => selectedIds.value.size > 0)
+
+function toggleSelect(platformListingId: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(platformListingId)) {
+    next.delete(platformListingId)
+  } else {
+    next.add(platformListingId)
+  }
+  selectedIds.value = next
+}
+
+function selectAll() {
+  selectedIds.value = new Set(visibleListings.value.map(l => l.platform_listing_id))
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+const bulkBlocking = ref(false)
+const bulkBlockDone = ref(0)
+const guestPrompt = ref<string | null>(null)  // sign-in CTA message for guest/anon
+
+async function blockSelected() {
+  if (!session.isLoggedIn) {
+    guestPrompt.value = 'Sign in to add sellers to the community blocklist.'
+    return
+  }
+  guestPrompt.value = null
+  bulkBlocking.value = true
+  bulkBlockDone.value = 0
+  const toBlock = visibleListings.value.filter(l => selectedIds.value.has(l.platform_listing_id))
+  const uniqueSellers = new Map<string, string>() // seller_id → username
+  for (const l of toBlock) {
+    if (l.seller_platform_id && !uniqueSellers.has(l.seller_platform_id)) {
+      const seller = store.sellers.get(l.seller_platform_id)
+      uniqueSellers.set(l.seller_platform_id, seller?.username ?? l.seller_platform_id)
+    }
+  }
+  for (const [sellerId, username] of uniqueSellers) {
+    if (!blocklist.isBlocklisted(sellerId)) {
+      try {
+        await blocklist.addSeller(sellerId, username, 'Bulk block from search results')
+        bulkBlockDone.value++
+      } catch { /* continue */ }
+    }
+  }
+  bulkBlocking.value = false
+  clearSelection()
+}
+
+function reportSelected() {
+  const toReport = visibleListings.value.filter(l => selectedIds.value.has(l.platform_listing_id))
+  // De-duplicate by seller — one report per seller covers all their listings
+  const seenSellers = new Set<string>()
+  for (const l of toReport) {
+    if (l.seller_platform_id && !seenSellers.has(l.seller_platform_id)) {
+      seenSellers.add(l.seller_platform_id)
+      const seller = store.sellers.get(l.seller_platform_id)
+      const username = seller?.username ?? l.seller_platform_id
+      window.open(
+        `https://contact.ebay.com/ws/eBayISAPI.dll?ReportUser&userid=${encodeURIComponent(username)}`,
+        '_blank',
+        'noopener,noreferrer',
+      )
+    }
+  }
+  clearSelection()
+}
 
 // Save search UI state
 const showSaveForm = ref(false)
@@ -365,6 +537,9 @@ const showFilters = ref(false)
 const saveName = ref('')
 const saveError = ref<string | null>(null)
 const saveSuccess = ref(false)
+
+// Show the eBay cancellation policy callout until the policy takes effect
+const showEbayCallout = computed(() => new Date() < new Date('2026-05-13T00:00:00'))
 
 // Count active non-default filters for the mobile badge
 const activeFilterCount = computed(() => {
@@ -715,6 +890,7 @@ async function onSearch() {
 }
 
 .search-btn:hover:not(:disabled) { background: var(--app-primary-hover); }
+.search-btn:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 2px; }
 .search-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .search-btn-icon { width: 1.1rem; height: 1.1rem; }
 
@@ -733,6 +909,7 @@ async function onSearch() {
   transition: background 150ms ease;
 }
 .cancel-btn:hover { background: rgba(248, 81, 73, 0.1); }
+.cancel-btn:focus-visible { outline: 2px solid var(--color-error); outline-offset: 2px; }
 
 .save-bookmark-btn {
   display: flex;
@@ -1013,6 +1190,11 @@ async function onSearch() {
   color: var(--color-text-inverse);
 }
 
+.filter-pages-btn:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
 .filter-pages-btn--locked,
 .filter-pages-btn:disabled {
   opacity: 0.35;
@@ -1048,6 +1230,136 @@ async function onSearch() {
 
 .results-error-icon { width: 1.25rem; height: 1.25rem; flex-shrink: 0; }
 
+/* ── Landing hero ────────────────────────────────────────────────────── */
+.landing-hero {
+  max-width: 760px;
+  margin: var(--space-12) auto;
+  padding: 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.landing-hero__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--app-primary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.landing-hero__headline {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.landing-hero__sub {
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+  max-width: 600px;
+  margin: 0;
+}
+
+.landing-hero__callout {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-text);
+}
+
+.landing-hero__callout-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.landing-hero__callout p { margin: 0; }
+
+.landing-hero__tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.landing-hero__tile {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.landing-hero__tile-icon { font-size: 1.5rem; line-height: 1; }
+
+.landing-hero__tile-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.landing-hero__tile-desc {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.landing-hero__signin-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  margin-top: var(--space-8);
+  padding: var(--space-4) var(--space-6);
+  background: color-mix(in srgb, var(--app-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-primary) 20%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.landing-hero__signin-text {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.landing-hero__signin-cta {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--app-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.landing-hero__signin-cta:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+  .landing-hero { margin: var(--space-8) auto; }
+  .landing-hero__tiles { grid-template-columns: 1fr; }
+  .landing-hero__signin-strip { flex-direction: column; text-align: center; }
+}
+
+@media (max-width: 480px) {
+  .landing-hero__headline { font-size: 1.75rem; }
+}
+
+/* ── Results empty (post-search, no matches) ─────────────────────────── */
 .results-empty {
   display: flex;
   flex-direction: column;
@@ -1059,6 +1371,12 @@ async function onSearch() {
 }
 
 .results-empty-icon { font-size: 3rem; }
+
+.results-empty__hint {
+  font-size: 0.875rem;
+  margin: 0;
+  color: var(--color-text-muted);
+}
 
 .results-toolbar {
   display: flex;
@@ -1183,6 +1501,107 @@ async function onSearch() {
   font-family: var(--font-body);
   font-size: 0.875rem;
   cursor: pointer;
+}
+
+/* ── Bulk action bar ────────────────────────────────────────────────────── */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: color-mix(in srgb, var(--app-primary) 10%, var(--color-surface-2));
+  border: 1px solid color-mix(in srgb, var(--app-primary) 30%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.bulk-bar__count {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--app-primary);
+  margin-right: var(--space-1);
+}
+
+.bulk-bar__sep {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border);
+  margin: 0 var(--space-1);
+}
+
+.bulk-bar__btn {
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+.bulk-bar__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.bulk-bar__btn--ghost {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.bulk-bar__btn--ghost:hover:not(:disabled) {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.bulk-bar__btn--danger {
+  background: transparent;
+  border: 1px solid var(--color-error);
+  color: var(--color-error);
+}
+.bulk-bar__btn--danger:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.bulk-bar__btn--report {
+  background: transparent;
+  border: 1px solid var(--color-text-muted);
+  color: var(--color-text-muted);
+}
+.bulk-bar__btn--report:hover:not(:disabled) {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border-color: var(--color-text);
+}
+
+/* Slide-in transition (shared by bulk-bar and guest-prompt) */
+.bulk-bar-enter-active, .bulk-bar-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.bulk-bar-enter-from, .bulk-bar-leave-to { opacity: 0; transform: translateY(-6px); }
+
+/* Guest sign-in prompt */
+.guest-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: color-mix(in srgb, var(--app-primary) 12%, var(--color-surface-2));
+  border: 1px solid color-mix(in srgb, var(--app-primary) 30%, transparent);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+.guest-prompt__link {
+  color: var(--app-primary);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.guest-prompt__link:hover { text-decoration: underline; }
+.guest-prompt__dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 var(--space-1);
 }
 
 .results-list {

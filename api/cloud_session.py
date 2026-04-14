@@ -16,8 +16,6 @@ FastAPI usage:
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import os
 import re
@@ -77,7 +75,6 @@ def compute_features(tier: str) -> SessionFeatures:
     """Compute feature flags from tier. Evaluated server-side; sent to frontend."""
     local = tier == "local"
     paid_plus = local or tier in ("paid", "premium", "ultra")
-    premium_plus = local or tier in ("premium", "ultra")
 
     return SessionFeatures(
         saved_searches=True,  # all tiers get saved searches
@@ -94,10 +91,28 @@ def compute_features(tier: str) -> SessionFeatures:
 # ── JWT validation ────────────────────────────────────────────────────────────
 
 def _extract_session_token(header_value: str) -> str:
-    """Extract cf_session value from a Cookie or X-CF-Session header string."""
-    # X-CF-Session may be the raw JWT or the full cookie string
+    """Extract cf_session value from a Cookie or X-CF-Session header string.
+
+    Returns the JWT token string, or "" if no valid session token is found.
+    Cookie strings like "snipe_guest=abc123" (no cf_session key) return ""
+    so the caller falls through to the guest/anonymous path rather than
+    passing a non-JWT string to validate_session_jwt().
+    """
     m = re.search(r'(?:^|;)\s*cf_session=([^;]+)', header_value)
-    return m.group(1).strip() if m else header_value.strip()
+    if m:
+        return m.group(1).strip()
+    # Only treat as a raw JWT if it has exactly three base64url segments (header.payload.sig).
+    # Cookie strings like "snipe_guest=abc123" must NOT be forwarded to JWT validation.
+    stripped = header_value.strip()
+    if re.match(r'^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_=]+$', stripped):
+        return stripped  # bare JWT forwarded directly by Caddy
+    return ""  # not a JWT and no cf_session cookie — treat as unauthenticated
+
+
+def _extract_guest_token(cookie_header: str) -> str | None:
+    """Extract snipe_guest UUID from the Cookie header, if present."""
+    m = re.search(r'(?:^|;)\s*snipe_guest=([^;]+)', cookie_header)
+    return m.group(1).strip() if m else None
 
 
 def validate_session_jwt(token: str) -> str:
@@ -178,6 +193,18 @@ def _user_db_path(user_id: str) -> Path:
     return path
 
 
+def _anon_db_path() -> Path:
+    """Shared pool DB for unauthenticated visitors.
+
+    All anonymous searches write listing data here. Seller and market comp
+    data accumulates in shared_db as normal, growing the anti-scammer corpus
+    with every public search regardless of auth state.
+    """
+    path = CLOUD_DATA_ROOT / "anonymous" / "snipe" / "user.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 # ── FastAPI dependency ────────────────────────────────────────────────────────
 
 def get_session(request: Request) -> CloudUser:
@@ -186,6 +213,8 @@ def get_session(request: Request) -> CloudUser:
     Local mode: returns a fully-privileged "local" user pointing at SNIPE_DB.
     Cloud mode: validates X-CF-Session JWT, provisions Heimdall license,
                 resolves tier, returns per-user DB paths.
+    Unauthenticated cloud visitors: returns a free-tier anonymous user so
+                search and scoring work without an account.
     """
     if not CLOUD_MODE:
         return CloudUser(
@@ -195,16 +224,30 @@ def get_session(request: Request) -> CloudUser:
             user_db=_LOCAL_SNIPE_DB,
         )
 
-    raw_header = (
-        request.headers.get("x-cf-session", "")
-        or request.headers.get("cookie", "")
-    )
+    cookie_header = request.headers.get("cookie", "")
+    raw_header = request.headers.get("x-cf-session", "") or cookie_header
+
     if not raw_header:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        # No session at all — check for a guest UUID cookie set by /api/session
+        guest_uuid = _extract_guest_token(cookie_header)
+        user_id = f"guest:{guest_uuid}" if guest_uuid else "anonymous"
+        return CloudUser(
+            user_id=user_id,
+            tier="free",
+            shared_db=_shared_db_path(),
+            user_db=_anon_db_path(),
+        )
 
     token = _extract_session_token(raw_header)
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        guest_uuid = _extract_guest_token(cookie_header)
+        user_id = f"guest:{guest_uuid}" if guest_uuid else "anonymous"
+        return CloudUser(
+            user_id=user_id,
+            tier="free",
+            shared_db=_shared_db_path(),
+            user_db=_anon_db_path(),
+        )
 
     user_id = validate_session_jwt(token)
     _ensure_provisioned(user_id)

@@ -1,4 +1,4 @@
-from app.tiers import can_use, FEATURES, LOCAL_VISION_UNLOCKABLE
+from app.tiers import can_use
 
 
 def test_metadata_scoring_is_free():
