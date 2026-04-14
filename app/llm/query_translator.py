@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from app.platforms.ebay.categories import EbayCategoryCache
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +88,80 @@ def _parse_response(raw: str) -> SearchParamsResponse:
     )
 
 
+# ── System prompt template ────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are a search assistant for Snipe, an eBay listing intelligence tool.
+Your job is to translate a natural-language description of what someone is looking for
+into a structured eBay search configuration.
+
+Return ONLY a JSON object with these exact fields — no preamble, no markdown, no extra keys:
+  base_query        (string)  Primary search term, short — e.g. "RTX 3080", "vintage Leica"
+  must_include_mode (string)  One of: "all" (AND), "any" (OR), "groups" (CNF: pipe=OR within group, comma=AND between groups)
+  must_include      (string)  Filter string per mode — leave blank if nothing to filter
+  must_exclude      (string)  Comma-separated terms to exclude — e.g. "mining,for parts,broken"
+  max_price         (number|null)  Maximum price in USD, or null
+  min_price         (number|null)  Minimum price in USD, or null
+  condition         (array)   Any of: "new", "used", "for_parts" — empty array means any condition
+  category_id       (string|null)  eBay category ID from the list below, or null if no match
+  explanation       (string)  One plain sentence summarizing what you built
+
+eBay "groups" mode syntax example: to find a GPU that is BOTH (nvidia OR amd) AND (16gb OR 8gb):
+  must_include_mode: "groups"
+  must_include: "nvidia|amd, 16gb|8gb"
+
+Phrase "like new", "open box", "refurbished" -> condition: ["used"]
+Phrase "broken", "for parts", "not working" -> condition: ["for_parts"]
+If unsure about condition, use an empty array.
+
+Available eBay categories (use category_id verbatim if one fits — otherwise omit):
+{category_hints}
+
+If none match, omit category_id (set to null). Respond with valid JSON only. No commentary outside the JSON object.
+"""
+
+
+# ── QueryTranslator ───────────────────────────────────────────────────────────
+
 class QueryTranslator:
-    """Stub — implemented in Task 6."""
-    pass
+    """Translates natural-language search descriptions into SearchParamsResponse.
+
+    Args:
+        category_cache: An EbayCategoryCache instance (may have empty cache).
+        llm_router: An LLMRouter instance from circuitforge_core.
+    """
+
+    def __init__(self, category_cache: "EbayCategoryCache", llm_router: object) -> None:
+        self._cache = category_cache
+        self._llm_router = llm_router
+
+    def translate(self, natural_language: str) -> SearchParamsResponse:
+        """Translate a natural-language query into a SearchParamsResponse.
+
+        Raises QueryTranslatorError if the LLM fails or returns bad JSON.
+        """
+        # Extract up to 10 keywords for category hint lookup
+        keywords = [w for w in natural_language.split()[:10] if len(w) > 2]
+        hints = self._cache.get_relevant(keywords, limit=30)
+        if not hints:
+            hints = self._cache.get_all_for_prompt(limit=40)
+
+        if hints:
+            category_hints = "\n".join(f"{cid}: {path}" for cid, path in hints)
+        else:
+            category_hints = "(no categories cached — omit category_id)"
+
+        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(category_hints=category_hints)
+
+        try:
+            raw = self._llm_router.complete(
+                natural_language,
+                system=system_prompt,
+                max_tokens=512,
+            )
+        except Exception as exc:
+            raise QueryTranslatorError(
+                f"LLM backend error: {exc}", raw=""
+            ) from exc
+
+        return _parse_response(raw)
