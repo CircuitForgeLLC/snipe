@@ -79,6 +79,9 @@
       </form>
     </header>
 
+    <!-- LLM query builder panel — only shown when feature flag is active -->
+    <LLMQueryPanel v-if="session.features.llm_query_builder" />
+
     <div class="search-body">
       <!-- Mobile filter toggle -->
       <button
@@ -450,6 +453,7 @@ import { useSavedSearchesStore } from '../stores/savedSearches'
 import { useSessionStore } from '../stores/session'
 import { useBlocklistStore } from '../stores/blocklist'
 import ListingCard from '../components/ListingCard.vue'
+import LLMQueryPanel from '../components/LLMQueryPanel.vue'
 
 const route = useRoute()
 const store = useSearchStore()

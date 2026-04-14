@@ -57,6 +57,15 @@ def _get_community_store() -> "SnipeCommunityStore | None":
     return _community_store
 
 
+# ── LLM Query Builder singletons (optional — requires LLM backend) ────────────
+_category_cache = None
+_query_translator = None
+
+
+def _get_query_translator():
+    return _query_translator
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _community_store
@@ -83,6 +92,34 @@ async def _lifespan(app: FastAPI):
             log.warning("Community DB unavailable — seller trust signals disabled.", exc_info=True)
     else:
         log.debug("COMMUNITY_DB_URL not set — community trust signals disabled.")
+
+    # LLM Query Builder — category cache + translator (best-effort, never blocks startup)
+    global _category_cache, _query_translator
+    try:
+        from app.platforms.ebay.categories import EbayCategoryCache
+        from app.llm.query_translator import QueryTranslator
+        from circuitforge_core.db import get_connection, run_migrations as _run_migrations
+        from pathlib import Path as _Path
+
+        _cat_conn = get_connection(sched_db)  # use the same DB as the app
+        _run_migrations(_cat_conn, _Path("app/db/migrations"))
+        _category_cache = EbayCategoryCache(_cat_conn)
+
+        if _category_cache.is_stale():
+            _category_cache.refresh(token_manager=None)  # bootstrap fallback
+
+        try:
+            from circuitforge_core.llm import LLMRouter
+            _llm_router = LLMRouter()
+            _query_translator = QueryTranslator(
+                category_cache=_category_cache,
+                llm_router=_llm_router,
+            )
+            log.info("LLM query builder ready.")
+        except Exception:
+            log.info("No LLM backend configured — query builder disabled.")
+    except Exception:
+        log.warning("LLM query builder init failed.", exc_info=True)
 
     yield
 
@@ -966,5 +1003,64 @@ def patch_preference(
     store = Store(session.user_db)
     store.set_user_preference(body.path, body.value)
     return store.get_all_preferences()
+
+
+# ── LLM Query Builder ─────────────────────────────────────────────────────────
+
+class BuildQueryRequest(BaseModel):
+    natural_language: str
+
+
+@app.post("/api/search/build")
+async def build_search_query(
+    body: BuildQueryRequest,
+    session: CloudUser = Depends(get_session),
+) -> dict:
+    """Translate a natural-language description into eBay search parameters.
+
+    Requires Paid tier or local mode. Returns a SearchParamsResponse JSON object
+    ready to pre-fill the search form.
+    """
+    features = compute_features(session.tier)
+    if not features.llm_query_builder:
+        raise HTTPException(
+            status_code=402,
+            detail="LLM query builder requires Paid tier or above.",
+        )
+
+    translator = _get_query_translator()
+    if translator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No LLM backend configured. Set OLLAMA_HOST, ANTHROPIC_API_KEY, or OPENAI_API_KEY.",
+        )
+
+    from app.llm.query_translator import QueryTranslatorError
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, translator.translate, body.natural_language.strip()
+        )
+    except QueryTranslatorError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": str(exc), "raw": exc.raw},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"LLM error: {exc}")
+
+    return {
+        "base_query": result.base_query,
+        "must_include_mode": result.must_include_mode,
+        "must_include": result.must_include,
+        "must_exclude": result.must_exclude,
+        "max_price": result.max_price,
+        "min_price": result.min_price,
+        "condition": result.condition,
+        "category_id": result.category_id,
+        "explanation": result.explanation,
+    }
 
 

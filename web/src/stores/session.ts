@@ -11,6 +11,7 @@ export interface SessionFeatures {
   photo_analysis: boolean
   shared_scammer_db: boolean
   shared_image_db: boolean
+  llm_query_builder: boolean
 }
 
 const LOCAL_FEATURES: SessionFeatures = {
@@ -22,6 +23,7 @@ const LOCAL_FEATURES: SessionFeatures = {
   photo_analysis: true,
   shared_scammer_db: true,
   shared_image_db: true,
+  llm_query_builder: true,
 }
 
 export const useSessionStore = defineStore('session', () => {

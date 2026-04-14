@@ -22,3 +22,13 @@ def test_saved_searches_are_free():
     # Ungated: retention feature — friction cost outweighs gate value (see tiers.py)
     assert can_use("saved_searches", tier="free") is True
     assert can_use("saved_searches", tier="paid") is True
+
+
+def test_llm_query_builder_is_paid():
+    assert can_use("llm_query_builder", tier="free") is False
+    assert can_use("llm_query_builder", tier="paid") is True
+
+
+def test_llm_query_builder_local_vision_does_not_unlock():
+    # local vision unlocks photo features only, not LLM query builder
+    assert can_use("llm_query_builder", tier="free", has_local_vision=True) is False

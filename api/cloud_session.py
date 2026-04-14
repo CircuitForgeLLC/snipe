@@ -69,6 +69,7 @@ class SessionFeatures:
     photo_analysis: bool
     shared_scammer_db: bool
     shared_image_db: bool
+    llm_query_builder: bool
 
 
 def compute_features(tier: str) -> SessionFeatures:
@@ -85,6 +86,7 @@ def compute_features(tier: str) -> SessionFeatures:
         photo_analysis=paid_plus,
         shared_scammer_db=paid_plus,
         shared_image_db=paid_plus,
+        llm_query_builder=paid_plus,
     )
 
 
