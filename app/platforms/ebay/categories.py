@@ -76,3 +76,41 @@ class EbayCategoryCache:
         )
         self._conn.commit()
         log.info("EbayCategoryCache: seeded %d bootstrap categories.", len(_BOOTSTRAP_CATEGORIES))
+
+    def get_relevant(
+        self,
+        keywords: list[str],
+        limit: int = 30,
+    ) -> list[tuple[str, str]]:
+        """Return (category_id, full_path) pairs matching any keyword.
+
+        Matches against both name and full_path (case-insensitive LIKE).
+        Returns at most `limit` rows.
+        """
+        if not keywords:
+            return []
+        conditions = " OR ".join(
+            "LOWER(name) LIKE ? OR LOWER(full_path) LIKE ?" for _ in keywords
+        )
+        params: list[str] = []
+        for kw in keywords:
+            like = f"%{kw.lower()}%"
+            params.extend([like, like])
+        params.append(limit)
+        cur = self._conn.execute(
+            f"SELECT category_id, full_path FROM ebay_categories"
+            f" WHERE {conditions} ORDER BY name LIMIT ?",
+            params,
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def get_all_for_prompt(self, limit: int = 80) -> list[tuple[str, str]]:
+        """Return up to `limit` (category_id, full_path) pairs, sorted by name.
+
+        Used when no keyword context is available.
+        """
+        cur = self._conn.execute(
+            "SELECT category_id, full_path FROM ebay_categories ORDER BY name LIMIT ?",
+            (limit,),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]

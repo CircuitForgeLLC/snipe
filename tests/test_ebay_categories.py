@@ -56,3 +56,34 @@ def test_seed_bootstrap_populates_rows(db):
     cur = db.execute("SELECT COUNT(*) FROM ebay_categories")
     count = cur.fetchone()[0]
     assert count >= BOOTSTRAP_MIN
+
+
+def test_get_relevant_keyword_match(db):
+    cache = EbayCategoryCache(db)
+    cache._seed_bootstrap()
+    results = cache.get_relevant(["GPU", "graphics"], limit=5)
+    ids = [r[0] for r in results]
+    assert "27386" in ids  # Graphics Cards
+
+
+def test_get_relevant_no_match(db):
+    cache = EbayCategoryCache(db)
+    cache._seed_bootstrap()
+    results = cache.get_relevant(["zzznomatch_xyzxyz"], limit=5)
+    assert results == []
+
+
+def test_get_relevant_respects_limit(db):
+    cache = EbayCategoryCache(db)
+    cache._seed_bootstrap()
+    results = cache.get_relevant(["electronics"], limit=3)
+    assert len(results) <= 3
+
+
+def test_get_all_for_prompt_returns_rows(db):
+    cache = EbayCategoryCache(db)
+    cache._seed_bootstrap()
+    results = cache.get_all_for_prompt(limit=10)
+    assert len(results) > 0
+    # Each entry is (category_id, full_path)
+    assert all(len(r) == 2 for r in results)
