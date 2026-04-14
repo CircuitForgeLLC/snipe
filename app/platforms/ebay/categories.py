@@ -13,6 +13,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import requests
+
 log = logging.getLogger(__name__)
 
 # Bootstrap table — common categories for self-hosters without eBay API credentials.
@@ -114,3 +116,95 @@ class EbayCategoryCache:
             (limit,),
         )
         return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def refresh(
+        self,
+        token_manager: Optional["EbayTokenManager"] = None,
+    ) -> int:
+        """Fetch the eBay category tree and upsert leaf nodes into SQLite.
+
+        Args:
+            token_manager: An `EbayTokenManager` instance for the Taxonomy API.
+                If None, falls back to seeding the hardcoded bootstrap table.
+
+        Returns:
+            Number of leaf categories stored.
+        """
+        if token_manager is None:
+            self._seed_bootstrap()
+            cur = self._conn.execute("SELECT COUNT(*) FROM ebay_categories")
+            return cur.fetchone()[0]
+
+        try:
+            token = token_manager.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # Step 1: get default tree ID for EBAY_US
+            id_resp = requests.get(
+                "https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id",
+                params={"marketplace_id": "EBAY_US"},
+                headers=headers,
+                timeout=30,
+            )
+            id_resp.raise_for_status()
+            tree_id = id_resp.json()["categoryTreeId"]
+
+            # Step 2: fetch full tree (large response — may take several seconds)
+            tree_resp = requests.get(
+                f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{tree_id}",
+                headers=headers,
+                timeout=120,
+            )
+            tree_resp.raise_for_status()
+            tree = tree_resp.json()
+
+            leaves: list[tuple[str, str, str]] = []
+            _extract_leaves(tree["rootCategoryNode"], path="", leaves=leaves)
+
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO ebay_categories"
+                " (category_id, name, full_path, is_leaf, refreshed_at)"
+                " VALUES (?, ?, ?, 1, ?)",
+                [(cid, name, path, now) for cid, name, path in leaves],
+            )
+            self._conn.commit()
+            log.info(
+                "EbayCategoryCache: refreshed %d leaf categories from eBay Taxonomy API.",
+                len(leaves),
+            )
+            return len(leaves)
+
+        except Exception:
+            log.warning(
+                "EbayCategoryCache: Taxonomy API refresh failed — falling back to bootstrap.",
+                exc_info=True,
+            )
+            self._seed_bootstrap()
+            cur = self._conn.execute("SELECT COUNT(*) FROM ebay_categories")
+            return cur.fetchone()[0]
+
+
+def _extract_leaves(
+    node: dict,
+    path: str,
+    leaves: list[tuple[str, str, str]],
+) -> None:
+    """Recursively walk the eBay category tree, collecting leaf node tuples.
+
+    Args:
+        node: A categoryTreeNode dict from the eBay Taxonomy API response.
+        path: The ancestor breadcrumb, e.g. "Consumer Electronics > Computers".
+        leaves: Accumulator list of (category_id, name, full_path) tuples.
+    """
+    cat = node["category"]
+    cat_id: str = cat["categoryId"]
+    cat_name: str = cat["categoryName"]
+    full_path = f"{path} > {cat_name}" if path else cat_name
+
+    if node.get("leafCategoryTreeNode", False):
+        leaves.append((cat_id, cat_name, full_path))
+        return  # leaf — no children to recurse into
+
+    for child in node.get("childCategoryTreeNodes", []):
+        _extract_leaves(child, full_path, leaves)

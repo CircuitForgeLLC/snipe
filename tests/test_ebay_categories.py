@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -87,3 +88,77 @@ def test_get_all_for_prompt_returns_rows(db):
     assert len(results) > 0
     # Each entry is (category_id, full_path)
     assert all(len(r) == 2 for r in results)
+
+
+def _make_tree_response() -> dict:
+    """Minimal eBay Taxonomy API tree response with two leaf nodes."""
+    return {
+        "categoryTreeId": "0",
+        "rootCategoryNode": {
+            "category": {"categoryId": "6000", "categoryName": "Root"},
+            "leafCategoryTreeNode": False,
+            "childCategoryTreeNodes": [
+                {
+                    "category": {"categoryId": "6001", "categoryName": "Electronics"},
+                    "leafCategoryTreeNode": False,
+                    "childCategoryTreeNodes": [
+                        {
+                            "category": {"categoryId": "6002", "categoryName": "GPUs"},
+                            "leafCategoryTreeNode": True,
+                            "childCategoryTreeNodes": [],
+                        },
+                        {
+                            "category": {"categoryId": "6003", "categoryName": "CPUs"},
+                            "leafCategoryTreeNode": True,
+                            "childCategoryTreeNodes": [],
+                        },
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def test_refresh_inserts_leaf_nodes(db):
+    mock_tm = MagicMock()
+    mock_tm.get_token.return_value = "fake-token"
+
+    tree_resp = MagicMock()
+    tree_resp.raise_for_status = MagicMock()
+    tree_resp.json.return_value = _make_tree_response()
+
+    id_resp = MagicMock()
+    id_resp.raise_for_status = MagicMock()
+    id_resp.json.return_value = {"categoryTreeId": "0"}
+
+    with patch("app.platforms.ebay.categories.requests.get") as mock_get:
+        mock_get.side_effect = [id_resp, tree_resp]
+        cache = EbayCategoryCache(db)
+        count = cache.refresh(mock_tm)
+
+    assert count == 2  # two leaf nodes in our fake tree
+    cur = db.execute("SELECT category_id FROM ebay_categories ORDER BY category_id")
+    ids = {row[0] for row in cur.fetchall()}
+    assert "6002" in ids
+    assert "6003" in ids
+
+
+def test_refresh_no_token_manager_seeds_bootstrap(db):
+    cache = EbayCategoryCache(db)
+    count = cache.refresh(token_manager=None)
+    assert count >= BOOTSTRAP_MIN
+
+
+def test_refresh_api_error_logs_warning(db, caplog):
+    import logging
+    mock_tm = MagicMock()
+    mock_tm.get_token.return_value = "fake-token"
+
+    with patch("app.platforms.ebay.categories.requests.get") as mock_get:
+        mock_get.side_effect = Exception("network error")
+        cache = EbayCategoryCache(db)
+        with caplog.at_level(logging.WARNING, logger="app.platforms.ebay.categories"):
+            count = cache.refresh(mock_tm)
+
+    # Falls back to bootstrap on API error
+    assert count >= BOOTSTRAP_MIN
