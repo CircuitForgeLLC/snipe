@@ -79,6 +79,30 @@
 
       <p v-if="prefs.error" class="settings-error" role="alert">{{ prefs.error }}</p>
     </section>
+
+    <section class="settings-section">
+      <h2 class="settings-section-title">Search</h2>
+
+      <label class="settings-toggle">
+        <div class="settings-toggle-text">
+          <span class="settings-toggle-label">Auto-run after Build with AI</span>
+          <span class="settings-toggle-desc">
+            When enabled, Snipe starts searching immediately after the AI fills in your filters.
+            Disable to review the filters before searching.
+          </span>
+        </div>
+        <button
+          class="toggle-btn"
+          :class="{ 'toggle-btn--on': llmAutoRun }"
+          :aria-pressed="String(llmAutoRun)"
+          aria-label="Run search automatically after AI builds filters"
+          @click="setLLMAutoRun(!llmAutoRun)"
+        >
+          <span class="toggle-btn__track" />
+          <span class="toggle-btn__thumb" />
+        </button>
+      </label>
+    </section>
   </div>
 </template>
 
@@ -87,10 +111,12 @@ import { ref, watch } from 'vue'
 import { useTrustSignalPref } from '../composables/useTrustSignalPref'
 import { useSessionStore } from '../stores/session'
 import { usePreferencesStore } from '../stores/preferences'
+import { useLLMQueryBuilder } from '../composables/useLLMQueryBuilder'
 
 const { enabled: trustSignalEnabled, setEnabled } = useTrustSignalPref()
 const session = useSessionStore()
 const prefs = usePreferencesStore()
+const { autoRun: llmAutoRun, setAutoRun: setLLMAutoRun } = useLLMQueryBuilder()
 
 // Local input buffer for BYOK ID — synced from store, saved on blur/enter
 const byokInput = ref(prefs.affiliateByokId)
