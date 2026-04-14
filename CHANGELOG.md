@@ -6,6 +6,36 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.0] — 2026-04-14
+
+### Added
+
+**Infrastructure and DevOps**
+
+- `.forgejo/workflows/ci.yml` — Python lint (ruff) + pytest + Vue typecheck + vitest on every PR/push to main. Installs circuitforge-core from GitHub mirror so the CI runner doesn't need the sibling directory.
+- `.forgejo/workflows/release.yml` — Docker build and push (api + web images) to Forgejo container registry on `v*` tags. Builds both images multi-arch (amd64 + arm64). Creates a Forgejo release with git-cliff changelog notes.
+- `.forgejo/workflows/mirror.yml` — Mirror push to GitHub and Codeberg on main/tags.
+- `install.sh` — Full rewrite following the CircuitForge installer pattern: colored output, `--docker` / `--bare-metal` / `--help` flags, auto-detection of Docker/conda/Python/Node/Chromium/Xvfb, license key prompting, structured named functions.
+- `docs/nginx-self-hosted.conf` — Sample nginx config for bare-metal self-hosted deployments (SPA fallback, SSE proxy settings, long-term asset caching).
+- `docs/getting-started/installation.md` — No-Docker install section: bare-metal instructions, nginx setup, Chromium/Xvfb note.
+- `compose.override.yml` — `cf-orch-agent` sidecar service for routing vision tasks to a cf-orch GPU coordinator (`--profile orch` opt-in). `CF_ORCH_COORDINATOR_URL` env var documented.
+- `.env.example` — `CF_ORCH_URL` and `CF_ORCH_COORDINATOR_URL` comments expanded with self-hosted coordinator guidance.
+
+**Screenshots** (post CSS fix)
+
+- Retook all docs screenshots (`01-hero`, `02-results`, `03-steal-badge`, `hero`) after the color-mix token fix so tints match the theme in both dark and light mode.
+
+### Closed
+
+- `#1` SSE live score push — already fully implemented in 0.2.0; closed.
+- `#22` Forgejo Actions CI/CD — shipped.
+- `#24` nginx config for no-Docker self-hosting — shipped.
+- `#25` Self-hosted installer script — shipped.
+- `#15` cf-orch agent in compose stack — shipped.
+- `#27` MCP server — already shipped in 0.2.0; closed.
+
+---
+
 ## [0.2.0] — 2026-04-12
 
 ### Added

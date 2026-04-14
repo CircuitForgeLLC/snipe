@@ -4,7 +4,9 @@
 # What this adds over compose.yml:
 #   - Live source mounts so code changes take effect without rebuilding images
 #   - RELOAD=true to enable uvicorn --reload for the API
-#   - NOTE: circuitforge-core is NOT mounted here — use `./manage.sh build` to
+#   - cf-orch-agent sidecar for local GPU task routing (opt-in: --profile orch)
+#
+# NOTE: circuitforge-core is NOT mounted here — use `./manage.sh build` to
 #     pick up cf-core changes. Mounting it as a bind volume would break self-hosted
 #     installs that don't have the sibling directory.
 services:
@@ -15,3 +17,32 @@ services:
       - ./tests:/app/snipe/tests
     environment:
       - RELOAD=true
+      # Point the LLM/vision task scheduler at the local cf-orch coordinator.
+      # Only has effect when CF_ORCH_URL is set (uncomment in .env, or set inline).
+      # - CF_ORCH_URL=http://10.1.10.71:7700
+
+  # cf-orch agent — routes trust_photo_analysis vision tasks to the GPU coordinator.
+  # Only starts when you pass --profile orch:
+  #   docker compose --profile orch up
+  #
+  # Requires a running cf-orch coordinator. Default: Heimdall at 10.1.10.71:7700.
+  # Override via CF_ORCH_COORDINATOR_URL in .env.
+  #
+  # To use a locally-built cf-orch image instead of the published one:
+  #   build:
+  #     context: ../circuitforge-orch
+  #     dockerfile: Dockerfile
+  cf-orch-agent:
+    image: ghcr.io/circuitforgellc/cf-orch:latest
+    command: >
+      agent
+      --coordinator ${CF_ORCH_COORDINATOR_URL:-http://10.1.10.71:7700}
+      --node-id snipe-dev
+      --host 0.0.0.0
+      --port 7701
+      --advertise-host 127.0.0.1
+    environment:
+      CF_COORDINATOR_URL: ${CF_ORCH_COORDINATOR_URL:-http://10.1.10.71:7700}
+    restart: on-failure
+    profiles:
+      - orch

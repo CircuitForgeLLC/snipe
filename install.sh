@@ -1,226 +1,384 @@
 #!/usr/bin/env bash
-# Snipe — self-hosted install script
+# Snipe — self-hosted installer
 #
 # Supports two install paths:
 #   Docker (recommended) — everything in containers, no system Python deps required
-#   No-Docker            — conda or venv + direct uvicorn, for machines without Docker
+#   Bare metal           — conda or pip venv + uvicorn, for machines without Docker
 #
 # Usage:
-#   bash install.sh                    # installs to ~/snipe
-#   bash install.sh /opt/snipe         # custom install directory
-#   bash install.sh ~/snipe --no-docker  # force no-Docker path even if Docker present
+#   bash install.sh               # interactive (auto-detects Docker)
+#   bash install.sh --docker      # Docker Compose setup only
+#   bash install.sh --bare-metal  # conda or venv + uvicorn
+#   bash install.sh --help
 #
-# Requirements (Docker path):   Docker with Compose plugin, Git
-# Requirements (no-Docker path): Python 3.11+, Node.js 20+, Git, xvfb (system)
+# No account or API key required. eBay credentials are optional (faster searches).
 
 set -euo pipefail
 
-INSTALL_DIR="${1:-$HOME/snipe}"
-FORCE_NO_DOCKER="${2:-}"
+# ── Terminal colours ───────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+info()   { echo -e "${BLUE}▶${NC} $*"; }
+ok()     { echo -e "${GREEN}✓${NC} $*"; }
+warn()   { echo -e "${YELLOW}⚠${NC}  $*"; }
+error()  { echo -e "${RED}✗${NC} $*" >&2; }
+header() { echo; echo -e "${BOLD}$*${NC}"; printf '%0.s─' {1..60}; echo; }
+dim()    { echo -e "${DIM}$*${NC}"; }
+ask()    { echo -e "${CYAN}?${NC} ${BOLD}$*${NC}"; }
+fail()   { error "$*"; exit 1; }
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+SNIPE_CONFIG_DIR="${HOME}/.config/circuitforge"
+SNIPE_ENV_FILE="${SNIPE_CONFIG_DIR}/snipe.env"
+SNIPE_VENV_DIR="${SNIPE_CONFIG_DIR}/venv"
 FORGEJO="https://git.opensourcesolarpunk.com/Circuit-Forge"
-CONDA_ENV="cf"
 
-info()  { echo "  [snipe] $*"; }
-ok()    { echo "✓ $*"; }
-warn()  { echo "! $*"; }
-fail()  { echo "✗ $*" >&2; exit 1; }
-hr()    { echo "────────────────────────────────────────────────────────"; }
+# Default install directory. Overridable:
+#   SNIPE_DIR=/opt/snipe bash install.sh
+SNIPE_INSTALL_DIR="${SNIPE_DIR:-${HOME}/snipe}"
 
-echo ""
-echo "  Snipe — self-hosted installer"
-echo "  Install directory: $INSTALL_DIR"
-echo ""
+# ── Argument parsing ───────────────────────────────────────────────────────────
+MODE_FORCE=""
+for arg in "$@"; do
+    case "$arg" in
+        --bare-metal) MODE_FORCE="bare-metal" ;;
+        --docker)     MODE_FORCE="docker" ;;
+        --help|-h)
+            echo "Usage: bash install.sh [--docker|--bare-metal|--help]"
+            echo
+            echo "  --docker      Docker Compose install (recommended)"
+            echo "  --bare-metal  conda or pip venv + uvicorn"
+            echo "  --help        Show this message"
+            echo
+            echo "  Set SNIPE_DIR=/path to change the install directory (default: ~/snipe)"
+            exit 0
+            ;;
+        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
 
-# ── Detect capabilities ──────────────────────────────────────────────────────
+# ── Banner ─────────────────────────────────────────────────────────────────────
+echo
+echo -e "${BOLD}  🎯 Snipe — eBay listing intelligence${NC}"
+echo -e "${DIM}  Bid with confidence. Privacy-first, no account required.${NC}"
+echo -e "${DIM}  Part of the Circuit Forge LLC suite (BSL 1.1)${NC}"
+echo
+
+# ── System checks ──────────────────────────────────────────────────────────────
+header "System checks"
 
 HAS_DOCKER=false
 HAS_CONDA=false
+HAS_CONDA_CMD=""
 HAS_PYTHON=false
 HAS_NODE=false
+HAS_CHROMIUM=false
+HAS_XVFB=false
+
+command -v git >/dev/null 2>&1 || fail "Git is required. Install: sudo apt-get install git"
+ok "Git found"
 
 docker compose version >/dev/null 2>&1 && HAS_DOCKER=true
-conda --version >/dev/null 2>&1 && HAS_CONDA=true
-python3 --version >/dev/null 2>&1 && HAS_PYTHON=true
-node --version >/dev/null 2>&1 && HAS_NODE=true
-command -v git >/dev/null 2>&1 || fail "Git is required. Install with: sudo apt-get install git"
+if $HAS_DOCKER; then ok "Docker (Compose plugin) found"; fi
 
-# Honour --no-docker flag
-[[ "$FORCE_NO_DOCKER" == "--no-docker" ]] && HAS_DOCKER=false
+# Detect conda / mamba / micromamba in preference order
+for _c in conda mamba micromamba; do
+    if command -v "$_c" >/dev/null 2>&1; then
+        HAS_CONDA=true
+        HAS_CONDA_CMD="$_c"
+        ok "Conda manager found: $_c"
+        break
+    fi
+done
 
-if $HAS_DOCKER; then
-    INSTALL_PATH="docker"
-    ok "Docker found — using Docker install path (recommended)"
+# Python 3.11+ check
+if command -v python3 >/dev/null 2>&1; then
+    _py_ok=$(python3 -c "import sys; print(sys.version_info >= (3,11))" 2>/dev/null || echo "False")
+    if [[ "$_py_ok" == "True" ]]; then
+        HAS_PYTHON=true
+        ok "Python 3.11+ found ($(python3 --version))"
+    else
+        warn "Python found but version is below 3.11 ($(python3 --version)) — bare-metal path may fail"
+    fi
+fi
+
+command -v node >/dev/null 2>&1 && HAS_NODE=true
+if $HAS_NODE; then ok "Node.js found ($(node --version))"; fi
+
+# Chromium / Google Chrome — needed for the Kasada-bypass scraper
+for _chrome in google-chrome chromium-browser chromium; do
+    if command -v "$_chrome" >/dev/null 2>&1; then
+        HAS_CHROMIUM=true
+        ok "Chromium/Chrome found: $_chrome"
+        break
+    fi
+done
+if ! $HAS_CHROMIUM; then
+    warn "Chromium / Google Chrome not found."
+    warn "Snipe uses headed Chromium + Xvfb to bypass eBay's Kasada anti-bot."
+    warn "The installer will install Chromium via Playwright. If that fails,"
+    warn "add eBay API credentials to .env to use the API adapter instead."
+fi
+
+# Xvfb — virtual framebuffer for headed Chromium on headless servers
+command -v Xvfb >/dev/null 2>&1 && HAS_XVFB=true
+if $HAS_XVFB; then ok "Xvfb found"; fi
+
+# ── Mode selection ─────────────────────────────────────────────────────────────
+header "Install mode"
+
+INSTALL_MODE=""
+if [[ -n "$MODE_FORCE" ]]; then
+    INSTALL_MODE="$MODE_FORCE"
+    info "Mode forced: $INSTALL_MODE"
+elif $HAS_DOCKER; then
+    INSTALL_MODE="docker"
+    ok "Docker available — using Docker install (recommended)"
+    dim "  Pass --bare-metal to override"
 elif $HAS_PYTHON; then
-    INSTALL_PATH="python"
-    warn "Docker not found — using no-Docker path (conda or venv)"
+    INSTALL_MODE="bare-metal"
+    warn "Docker not found — using bare-metal install"
 else
     fail "Docker or Python 3.11+ is required. Install Docker: https://docs.docker.com/get-docker/"
 fi
 
-# ── Clone repos ──────────────────────────────────────────────────────────────
+# ── Clone repos ───────────────────────────────────────────────────────────────
+header "Clone repositories"
 
 # compose.yml and the Dockerfile both use context: .. (parent directory), so
-# snipe/ and circuitforge-core/ must be siblings inside INSTALL_DIR.
-SNIPE_DIR="$INSTALL_DIR/snipe"
-CORE_DIR="$INSTALL_DIR/circuitforge-core"
+# snipe/ and circuitforge-core/ must be siblings inside SNIPE_INSTALL_DIR.
+REPO_DIR="$SNIPE_INSTALL_DIR"
+SNIPE_DIR_ACTUAL="$REPO_DIR/snipe"
+CORE_DIR="$REPO_DIR/circuitforge-core"
 
-if [[ -d "$SNIPE_DIR" ]]; then
-    info "Snipe already cloned — pulling latest..."
-    git -C "$SNIPE_DIR" pull --ff-only
-else
-    info "Cloning Snipe..."
-    mkdir -p "$INSTALL_DIR"
-    git clone "$FORGEJO/snipe.git" "$SNIPE_DIR"
-fi
-ok "Snipe → $SNIPE_DIR"
+_clone_or_pull() {
+    local label="$1" url="$2" dest="$3"
+    if [[ -d "$dest/.git" ]]; then
+        info "$label already cloned — pulling latest..."
+        git -C "$dest" pull --ff-only
+    else
+        info "Cloning $label..."
+        mkdir -p "$(dirname "$dest")"
+        git clone "$url" "$dest"
+    fi
+    ok "$label → $dest"
+}
 
-if [[ -d "$CORE_DIR" ]]; then
-    info "circuitforge-core already cloned — pulling latest..."
-    git -C "$CORE_DIR" pull --ff-only
-else
-    info "Cloning circuitforge-core (shared library)..."
-    git clone "$FORGEJO/circuitforge-core.git" "$CORE_DIR"
-fi
-ok "circuitforge-core → $CORE_DIR"
+_clone_or_pull "snipe" "$FORGEJO/snipe.git" "$SNIPE_DIR_ACTUAL"
+_clone_or_pull "circuitforge-core" "$FORGEJO/circuitforge-core.git" "$CORE_DIR"
 
-# ── Configure environment ────────────────────────────────────────────────────
+# ── Config file ────────────────────────────────────────────────────────────────
+header "Configuration"
 
-ENV_FILE="$SNIPE_DIR/.env"
+ENV_FILE="$SNIPE_DIR_ACTUAL/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-    cp "$SNIPE_DIR/.env.example" "$ENV_FILE"
-    # Safe defaults for local installs — no eBay registration, no Heimdall
+    cp "$SNIPE_DIR_ACTUAL/.env.example" "$ENV_FILE"
+    # Disable webhook signature verification for local installs
+    # (no production eBay key yet — the endpoint won't be registered)
     sed -i 's/^EBAY_WEBHOOK_VERIFY_SIGNATURES=true/EBAY_WEBHOOK_VERIFY_SIGNATURES=false/' "$ENV_FILE"
     ok ".env created from .env.example"
-    echo ""
-    info "Snipe works out of the box with no API keys."
-    info "Add EBAY_APP_ID / EBAY_CERT_ID later for faster searches (optional)."
-    echo ""
+    echo
+    dim "  Snipe works out of the box with no API keys (scraper mode)."
+    dim "  Add EBAY_APP_ID / EBAY_CERT_ID later for faster searches (optional)."
+    dim "  Edit: $ENV_FILE"
+    echo
 else
-    info ".env already exists — skipping (delete it to reset)"
+    info ".env already exists — skipping (delete to reset defaults)"
 fi
 
-cd "$SNIPE_DIR"
+# ── License key (optional) ─────────────────────────────────────────────────────
+header "CircuitForge license key (optional)"
+dim "  Snipe is free to self-host. A Paid/Premium key unlocks cloud features"
+dim "  (photo analysis, eBay OAuth). Skip this if you don't have one."
+echo
+ask "Enter your license key, or press Enter to skip:"
+read -r _license_key || true
 
-# ── Docker install path ───────────────────────────────────────────────────────
+if [[ -n "${_license_key:-}" ]]; then
+    _key_re='^CFG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$'
+    if echo "$_license_key" | grep -qP "$_key_re" 2>/dev/null || \
+       echo "$_license_key" | grep -qE "$_key_re" 2>/dev/null; then
+        # Append / uncomment Heimdall vars in .env
+        if grep -q "^# HEIMDALL_URL=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "s|^# HEIMDALL_URL=.*|HEIMDALL_URL=https://license.circuitforge.tech|" "$ENV_FILE"
+        else
+            echo "HEIMDALL_URL=https://license.circuitforge.tech" >> "$ENV_FILE"
+        fi
+        # Write or replace CF_LICENSE_KEY
+        if grep -q "^CF_LICENSE_KEY=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "s|^CF_LICENSE_KEY=.*|CF_LICENSE_KEY=${_license_key}|" "$ENV_FILE"
+        else
+            echo "CF_LICENSE_KEY=${_license_key}" >> "$ENV_FILE"
+        fi
+        ok "License key saved to .env"
+    else
+        warn "Key format not recognised (expected CFG-XXXX-XXXX-XXXX-XXXX) — skipping."
+        warn "Edit $ENV_FILE to add it manually."
+    fi
+else
+    info "No license key entered — self-hosted free tier."
+fi
 
-if [[ "$INSTALL_PATH" == "docker" ]]; then
+# ── Docker install ─────────────────────────────────────────────────────────────
+_install_docker() {
+    header "Docker install"
+
+    cd "$SNIPE_DIR_ACTUAL"
     info "Building Docker images (~1 GB download on first run)..."
     docker compose build
 
     info "Starting Snipe..."
     docker compose up -d
 
-    echo ""
+    echo
     ok "Snipe is running!"
-    hr
-    echo "  Web UI:  http://localhost:8509"
-    echo "  API:     http://localhost:8510/docs"
-    echo ""
-    echo "  Manage:  cd $SNIPE_DIR && ./manage.sh {start|stop|restart|logs|test}"
-    hr
-    echo ""
-    exit 0
-fi
+    printf '%0.s─' {1..60}; echo
+    echo -e "  ${GREEN}Web UI:${NC}  http://localhost:8509"
+    echo -e "  ${GREEN}API:${NC}     http://localhost:8510/docs"
+    echo
+    echo -e "  ${DIM}Manage:  cd $SNIPE_DIR_ACTUAL && ./manage.sh {start|stop|restart|logs|test}${NC}"
+    printf '%0.s─' {1..60}; echo
+    echo
+}
 
-# ── No-Docker install path ───────────────────────────────────────────────────
-
-# System deps: Xvfb is required for Playwright (Kasada bypass via headed Chromium)
-if ! command -v Xvfb >/dev/null 2>&1; then
+# ── Bare-metal install ─────────────────────────────────────────────────────────
+_install_xvfb() {
+    if $HAS_XVFB; then return; fi
     info "Installing Xvfb (required for eBay scraper)..."
     if command -v apt-get >/dev/null 2>&1; then
         sudo apt-get install -y --no-install-recommends xvfb
+        ok "Xvfb installed"
     elif command -v dnf >/dev/null 2>&1; then
         sudo dnf install -y xorg-x11-server-Xvfb
+        ok "Xvfb installed"
     elif command -v brew >/dev/null 2>&1; then
-        warn "macOS: Xvfb not available. The scraper fallback may fail."
+        warn "macOS: Xvfb not available via Homebrew."
+        warn "The scraper (Kasada bypass) will not work on macOS."
         warn "Add eBay API credentials to .env to use the API adapter instead."
     else
-        warn "Could not install Xvfb automatically. Install it with your package manager."
+        warn "Could not install Xvfb automatically. Install it with your system package manager."
+        warn "  Debian/Ubuntu: sudo apt-get install xvfb"
+        warn "  Fedora/RHEL:   sudo dnf install xorg-x11-server-Xvfb"
     fi
-fi
+}
 
-# ── Python environment setup ─────────────────────────────────────────────────
-
-if $HAS_CONDA; then
-    info "Setting up conda environment '$CONDA_ENV'..."
-    if conda env list | grep -q "^$CONDA_ENV "; then
-        info "Conda env '$CONDA_ENV' already exists — updating..."
-        conda run -n "$CONDA_ENV" pip install --quiet -e "$CORE_DIR"
-        conda run -n "$CONDA_ENV" pip install --quiet -e "$SNIPE_DIR"
+_setup_python_env() {
+    if $HAS_CONDA; then
+        info "Setting up conda environment (manager: $HAS_CONDA_CMD)..."
+        _env_name="cf"
+        if "$HAS_CONDA_CMD" env list 2>/dev/null | grep -q "^${_env_name} "; then
+            info "Conda env '$_env_name' already exists — updating packages..."
+        else
+            "$HAS_CONDA_CMD" create -n "$_env_name" python=3.11 -y
+        fi
+        "$HAS_CONDA_CMD" run -n "$_env_name" pip install --quiet -e "$CORE_DIR"
+        "$HAS_CONDA_CMD" run -n "$_env_name" pip install --quiet -e "$SNIPE_DIR_ACTUAL"
+        "$HAS_CONDA_CMD" run -n "$_env_name" playwright install chromium
+        "$HAS_CONDA_CMD" run -n "$_env_name" playwright install-deps chromium
+        PYTHON_BIN="$HAS_CONDA_CMD run -n $_env_name"
+        ok "Conda environment '$_env_name' ready"
     else
-        conda create -n "$CONDA_ENV" python=3.11 -y
-        conda run -n "$CONDA_ENV" pip install --quiet -e "$CORE_DIR"
-        conda run -n "$CONDA_ENV" pip install --quiet -e "$SNIPE_DIR"
+        info "Setting up pip venv at $SNIPE_VENV_DIR ..."
+        mkdir -p "$SNIPE_CONFIG_DIR"
+        python3 -m venv "$SNIPE_VENV_DIR"
+        "$SNIPE_VENV_DIR/bin/pip" install --quiet -e "$CORE_DIR"
+        "$SNIPE_VENV_DIR/bin/pip" install --quiet -e "$SNIPE_DIR_ACTUAL"
+        "$SNIPE_VENV_DIR/bin/playwright" install chromium
+        "$SNIPE_VENV_DIR/bin/playwright" install-deps chromium
+        PYTHON_BIN="$SNIPE_VENV_DIR/bin"
+        ok "Python venv ready at $SNIPE_VENV_DIR"
     fi
-    conda run -n "$CONDA_ENV" playwright install chromium
-    conda run -n "$CONDA_ENV" playwright install-deps chromium
-    PYTHON_RUN="conda run -n $CONDA_ENV"
-    ok "Conda environment '$CONDA_ENV' ready"
-else
-    info "Setting up Python venv at $SNIPE_DIR/.venv ..."
-    python3 -m venv "$SNIPE_DIR/.venv"
-    "$SNIPE_DIR/.venv/bin/pip" install --quiet -e "$CORE_DIR"
-    "$SNIPE_DIR/.venv/bin/pip" install --quiet -e "$SNIPE_DIR"
-    "$SNIPE_DIR/.venv/bin/playwright" install chromium
-    "$SNIPE_DIR/.venv/bin/playwright" install-deps chromium
-    PYTHON_RUN="$SNIPE_DIR/.venv/bin"
-    ok "Python venv ready at $SNIPE_DIR/.venv"
-fi
+}
 
-# ── Frontend ─────────────────────────────────────────────────────────────────
-
-if $HAS_NODE; then
+_build_frontend() {
+    if ! $HAS_NODE; then
+        warn "Node.js not found — skipping frontend build."
+        warn "Install Node.js 20+ from https://nodejs.org and re-run install.sh."
+        warn "Until then, access the API at http://localhost:8510/docs"
+        return
+    fi
     info "Building Vue frontend..."
-    cd "$SNIPE_DIR/web"
+    cd "$SNIPE_DIR_ACTUAL/web"
     npm ci --prefer-offline --silent
     npm run build
-    cd "$SNIPE_DIR"
+    cd "$SNIPE_DIR_ACTUAL"
     ok "Frontend built → web/dist/"
-else
-    warn "Node.js not found — skipping frontend build."
-    warn "Install Node.js 20+ from https://nodejs.org and re-run install.sh to build the UI."
-    warn "Until then, you can access the API directly at http://localhost:8510/docs"
-fi
+}
 
-# ── Write start/stop scripts ─────────────────────────────────────────────────
-
-cat > "$SNIPE_DIR/start-local.sh" << 'STARTSCRIPT'
+_write_start_scripts() {
+    # start-local.sh — launches the FastAPI server
+    cat > "$SNIPE_DIR_ACTUAL/start-local.sh" << 'STARTSCRIPT'
 #!/usr/bin/env bash
-# Start Snipe without Docker (API only — run from the snipe/ directory)
+# Start Snipe API (bare-metal / no-Docker mode)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [[ -f .venv/bin/uvicorn ]]; then
-    UVICORN=".venv/bin/uvicorn"
-elif command -v conda >/dev/null 2>&1 && conda env list | grep -q "^cf "; then
+if [[ -f "$HOME/.config/circuitforge/venv/bin/uvicorn" ]]; then
+    UVICORN="$HOME/.config/circuitforge/venv/bin/uvicorn"
+elif command -v conda >/dev/null 2>&1 && conda env list 2>/dev/null | grep -q "^cf "; then
     UVICORN="conda run -n cf uvicorn"
+elif command -v mamba >/dev/null 2>&1 && mamba env list 2>/dev/null | grep -q "^cf "; then
+    UVICORN="mamba run -n cf uvicorn"
 else
-    echo "No Python env found. Run install.sh first." >&2; exit 1
+    echo "No Snipe Python environment found. Run install.sh first." >&2; exit 1
 fi
 
 mkdir -p data
-echo "Starting Snipe API on http://localhost:8510 ..."
-$UVICORN api.main:app --host 0.0.0.0 --port 8510 "${@}"
+echo "Starting Snipe API → http://localhost:8510 ..."
+exec $UVICORN api.main:app --host 0.0.0.0 --port 8510 "${@}"
 STARTSCRIPT
-chmod +x "$SNIPE_DIR/start-local.sh"
+    chmod +x "$SNIPE_DIR_ACTUAL/start-local.sh"
 
-# Frontend serving (if built)
-cat > "$SNIPE_DIR/serve-ui.sh" << 'UISCRIPT'
+    # serve-ui.sh — serves the built Vue frontend (dev only)
+    cat > "$SNIPE_DIR_ACTUAL/serve-ui.sh" << 'UISCRIPT'
 #!/usr/bin/env bash
-# Serve the pre-built Vue frontend on port 8509 (dev only — use nginx for production)
+# Serve the pre-built Vue frontend (dev only — use nginx for production).
+# See docs/nginx-self-hosted.conf for a production nginx config.
 cd "$(dirname "$0")/web/dist"
-python3 -m http.server 8509
+echo "Serving Snipe UI → http://localhost:8509 (Ctrl+C to stop)"
+exec python3 -m http.server 8509
 UISCRIPT
-chmod +x "$SNIPE_DIR/serve-ui.sh"
+    chmod +x "$SNIPE_DIR_ACTUAL/serve-ui.sh"
 
-echo ""
-ok "Snipe installed (no-Docker mode)"
-hr
-echo "  Start API:     cd $SNIPE_DIR && ./start-local.sh"
-echo "  Serve UI:      cd $SNIPE_DIR && ./serve-ui.sh  (separate terminal)"
-echo "  API docs:      http://localhost:8510/docs"
-echo "  Web UI:        http://localhost:8509  (after ./serve-ui.sh)"
-echo ""
-echo "  For production, point nginx at web/dist/ and proxy /api/ to localhost:8510"
-hr
-echo ""
+    ok "Start scripts written"
+}
+
+_install_bare_metal() {
+    header "Bare-metal install"
+    _install_xvfb
+    _setup_python_env
+    _build_frontend
+    _write_start_scripts
+
+    echo
+    ok "Snipe installed (bare-metal mode)"
+    printf '%0.s─' {1..60}; echo
+    echo -e "  ${GREEN}Start API:${NC}   cd $SNIPE_DIR_ACTUAL && ./start-local.sh"
+    echo -e "  ${GREEN}Serve UI:${NC}    cd $SNIPE_DIR_ACTUAL && ./serve-ui.sh  ${DIM}(separate terminal)${NC}"
+    echo -e "  ${GREEN}API docs:${NC}    http://localhost:8510/docs"
+    echo -e "  ${GREEN}Web UI:${NC}      http://localhost:8509  ${DIM}(after ./serve-ui.sh)${NC}"
+    echo
+    echo -e "  ${DIM}For production, configure nginx to proxy /api/ to localhost:8510${NC}"
+    echo -e "  ${DIM}and serve web/dist/ as the document root.${NC}"
+    echo -e "  ${DIM}See: $SNIPE_DIR_ACTUAL/docs/nginx-self-hosted.conf${NC}"
+    printf '%0.s─' {1..60}; echo
+    echo
+}
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+main() {
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        _install_docker
+    else
+        _install_bare_metal
+    fi
+}
+
+main

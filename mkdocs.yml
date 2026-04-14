@@ -1,0 +1,63 @@
+site_name: Snipe
+site_description: eBay trust scoring before you bid — catch scammers, flag suspicious prices, surface duplicate photos.
+site_author: Circuit Forge LLC
+site_url: https://docs.circuitforge.tech/snipe
+repo_url: https://git.opensourcesolarpunk.com/Circuit-Forge/snipe
+repo_name: Circuit-Forge/snipe
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick-start.md
+    - eBay API Keys (Optional): getting-started/ebay-api.md
+  - User Guide:
+    - Searching: user-guide/searching.md
+    - Trust Scores: user-guide/trust-scores.md
+    - Red Flags: user-guide/red-flags.md
+    - Community Blocklist: user-guide/blocklist.md
+    - Settings: user-guide/settings.md
+  - Reference:
+    - Trust Score Algorithm: reference/trust-scoring.md
+    - Tier System: reference/tier-system.md
+    - Architecture: reference/architecture.md
