@@ -109,7 +109,7 @@ async def _lifespan(app: FastAPI):
             _category_cache.refresh(token_manager=None)  # bootstrap fallback
 
         try:
-            from circuitforge_core.llm import LLMRouter
+            from app.llm.router import LLMRouter
             _llm_router = LLMRouter()
             _query_translator = QueryTranslator(
                 category_cache=_category_cache,

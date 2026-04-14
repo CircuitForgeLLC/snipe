@@ -1,0 +1,38 @@
+# config/llm.cloud.yaml
+# Snipe — LLM config for the managed cloud instance (menagerie)
+#
+# Mounted read-only into the cloud API container at /app/config/llm.yaml
+# (see compose.cloud.yml).  Personal fine-tunes and local-only backends
+# (claude_code, copilot) are intentionally excluded here.
+#
+# CF Orchestrator routes both ollama and vllm allocations for VRAM-aware
+# scheduling.  CF_ORCH_URL must be set in .env for allocations to resolve;
+# if cf-orch is unreachable the backend falls back to its static base_url.
+#
+# Model choice for query builder: llama3.1:8b
+#   - Reliable instruction following and JSON output
+#   - No creative fine-tuning drift (unlike writer models in the pool)
+#   - Fits comfortably in 8 GB VRAM alongside other services
+
+backends:
+  ollama:
+    type: openai_compat
+    base_url: http://host.docker.internal:11434/v1
+    api_key: ollama
+    model: llama3.1:8b
+    enabled: true
+    supports_images: false
+    cf_orch:
+      service: ollama
+      ttl_s: 300
+
+  anthropic:
+    type: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    model: claude-haiku-4-5-20251001
+    enabled: false
+    supports_images: false
+
+fallback_order:
+  - ollama
+  - anthropic

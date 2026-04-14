@@ -9,3 +9,4 @@ data/
 .superpowers/
 web/node_modules/
 web/dist/
+config/llm.yaml

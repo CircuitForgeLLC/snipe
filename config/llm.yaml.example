@@ -1,0 +1,45 @@
+# config/llm.yaml.example
+# Snipe — LLM backend configuration
+#
+# Copy to config/llm.yaml and edit for your setup.
+# The query builder ("Search with AI") uses the text fallback_order.
+#
+# Backends are tried in fallback_order until one succeeds.
+# Set enabled: false to skip a backend without removing it.
+#
+# CF Orchestrator (cf-orch): when CF_ORCH_URL is set in the environment and a
+# backend has a cf_orch block, allocations are routed through cf-orch for
+# VRAM-aware scheduling. Omit cf_orch to hit the backend directly.
+
+backends:
+  anthropic:
+    type: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    model: claude-haiku-4-5-20251001
+    enabled: false
+    supports_images: false
+
+  openai:
+    type: openai_compat
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    model: gpt-4o-mini
+    enabled: false
+    supports_images: false
+
+  ollama:
+    type: openai_compat
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+    model: llama3.1:8b
+    enabled: true
+    supports_images: false
+    # Uncomment to route through cf-orch for VRAM-aware scheduling:
+    # cf_orch:
+    #   service: ollama
+    #   ttl_s: 300
+
+fallback_order:
+  - anthropic
+  - openai
+  - ollama
