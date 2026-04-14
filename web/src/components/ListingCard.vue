@@ -5,10 +5,25 @@
       'steal-card': isSteal,
       'listing-card--auction': isAuction && hoursRemaining !== null && hoursRemaining > 1,
       'listing-card--triple-red': tripleRed,
+      'listing-card--selected': selected,
     }"
+    @click="selectMode ? $emit('toggle') : undefined"
   >
     <!-- Thumbnail -->
     <div class="card__thumb">
+      <!-- Selection checkbox — always in DOM; shown on hover or when in select mode -->
+      <button
+        v-show="selectMode || selected"
+        class="card__select-btn"
+        :class="{ 'card__select-btn--checked': selected }"
+        :aria-pressed="selected"
+        :aria-label="selected ? 'Deselect listing' : 'Select listing'"
+        @click.stop="$emit('toggle')"
+      >
+        <svg v-if="selected" viewBox="0 0 12 12" fill="currentColor" width="10" height="10">
+          <path d="M1.5 6L4.5 9L10.5 3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <img
         v-if="listing.photo_urls.length"
         :src="listing.photo_urls[0]"
@@ -25,9 +40,13 @@
     <!-- Main info -->
     <div class="card__body">
       <!-- Title row -->
-      <a :href="listing.url" target="_blank" rel="noopener noreferrer" class="card__title">
-        {{ listing.title }}
-      </a>
+      <a
+        :href="listing.url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="card__title"
+        @click="selectMode && $event.preventDefault()"
+      >{{ listing.title }}</a>
 
       <!-- Format + condition badges -->
       <div class="card__badges">
@@ -77,6 +96,7 @@
         v-model="blockReason"
         class="card__block-reason"
         placeholder="Reason (optional)"
+        aria-label="Reason for blocking (optional)"
         maxlength="200"
         @keydown.enter="onBlock"
         @keydown.esc="blockingOpen = false"
@@ -96,6 +116,8 @@
         class="card__trust"
         :class="[trustClass, { 'card__trust--partial': trust?.score_is_partial }]"
         :title="trustBadgeTitle"
+        :aria-label="trustBadgeTitle"
+        role="img"
       >
         <span class="card__trust-num">{{ trust?.composite_score ?? '?' }}</span>
         <span class="card__trust-label">Trust</span>
@@ -115,6 +137,7 @@
           class="card__enrich-btn"
           :class="{ 'card__enrich-btn--spinning': enriching, 'card__enrich-btn--error': enrichError }"
           :title="enrichError ? 'Enrichment failed — try again' : 'Refresh score now'"
+          :aria-label="enrichError ? 'Enrichment failed, try again' : 'Refresh trust score'"
           :disabled="enriching"
           @click.stop="onEnrich"
         >{{ enrichError ? '✗' : '↻' }}</button>
@@ -124,12 +147,15 @@
           class="card__block-btn"
           :class="{ 'card__block-btn--active': isBlocked }"
           :title="isBlocked ? 'Seller is blocked' : 'Block this seller'"
+          :aria-label="isBlocked ? `${seller.username} is blocked` : `Block seller ${seller.username}`"
+          :aria-pressed="isBlocked"
           @click.stop="isBlocked ? null : (blockingOpen = !blockingOpen)"
         >⚑</button>
       </div>
 
-      <!-- Trust feedback: calm "looks right / wrong" signal buttons -->
+      <!-- Trust feedback: opt-in signal buttons (off by default, enabled in Settings) -->
       <TrustFeedbackButtons
+        v-if="trustSignalEnabled"
         :seller-id="`ebay::${listing.seller_platform_id}`"
         :trust="trust"
       />
@@ -159,13 +185,20 @@ import type { Listing, TrustScore, Seller } from '../stores/search'
 import { useSearchStore } from '../stores/search'
 import { useBlocklistStore } from '../stores/blocklist'
 import TrustFeedbackButtons from './TrustFeedbackButtons.vue'
+import { useTrustSignalPref } from '../composables/useTrustSignalPref'
+
+const { enabled: trustSignalEnabled } = useTrustSignalPref()
 
 const props = defineProps<{
   listing: Listing
   trust: TrustScore | null
   seller: Seller | null
   marketPrice: number | null
+  selected?: boolean
+  selectMode?: boolean
 }>()
+
+const emit = defineEmits<{ toggle: [] }>()
 
 const store = useSearchStore()
 const blocklist = useBlocklistStore()
@@ -365,17 +398,55 @@ const formattedMarket = computed(() => {
   box-shadow: var(--shadow-md);
 }
 
+/* Selection */
+.listing-card--selected {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-primary) 30%, transparent);
+}
+
+.listing-card:hover .card__select-btn {
+  display: flex !important; /* reveal on hover even when v-show hides it */
+}
+
+.card__select-btn {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 5;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--color-border);
+  background: var(--color-surface-raised);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  color: #fff;
+  opacity: 0.7;
+}
+.card__select-btn:hover,
+.card__select-btn--checked { opacity: 1; }
+.card__select-btn:hover { border-color: var(--app-primary); }
+.card__select-btn--checked {
+  background: var(--app-primary);
+  border-color: var(--app-primary);
+}
+
 /* Thumbnail */
 .card__thumb {
   width: 80px;
   height: 80px;
   border-radius: var(--radius-md);
-  overflow: hidden;
+  overflow: visible; /* allow checkbox to poke out */
   flex-shrink: 0;
   background: var(--color-surface-raised);
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .card__img {
@@ -442,9 +513,9 @@ const formattedMarket = computed(() => {
 }
 
 .card__flag-badge {
-  background: rgba(248, 81, 73, 0.15);
+  background: color-mix(in srgb, var(--color-error) 15%, transparent);
   color: var(--color-error);
-  border: 1px solid rgba(248, 81, 73, 0.3);
+  border: 1px solid color-mix(in srgb, var(--color-error) 30%, transparent);
   padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
   font-size: 0.6875rem;
@@ -563,6 +634,7 @@ const formattedMarket = computed(() => {
 }
 .listing-card:hover .card__block-btn { opacity: 0.5; }
 .listing-card:hover .card__block-btn:hover { opacity: 1; color: var(--color-error); border-color: var(--color-error); }
+.card__block-btn:focus-visible { opacity: 0.6; outline: 2px solid var(--app-primary); outline-offset: 2px; }
 .card__block-btn--active { opacity: 1 !important; color: var(--color-error); border-color: var(--color-error); cursor: default; }
 
 /* Block popover */
@@ -688,7 +760,7 @@ const formattedMarket = computed(() => {
 .listing-card--triple-red:hover {
   animation: none;
   border-color: var(--color-error);
-  box-shadow: 0 0 10px 2px rgba(248, 81, 73, 0.35);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--color-error) 35%, transparent);
 }
 
 .listing-card--triple-red:hover::after {
@@ -698,12 +770,12 @@ const formattedMarket = computed(() => {
 
 @keyframes triple-red-glow {
   0%, 100% {
-    border-color: rgba(248, 81, 73, 0.5);
-    box-shadow: 0 0 5px 1px rgba(248, 81, 73, 0.2);
+    border-color: color-mix(in srgb, var(--color-error) 50%, transparent);
+    box-shadow: 0 0 5px 1px color-mix(in srgb, var(--color-error) 20%, transparent);
   }
   50% {
     border-color: var(--color-error);
-    box-shadow: 0 0 14px 3px rgba(248, 81, 73, 0.45);
+    box-shadow: 0 0 14px 3px color-mix(in srgb, var(--color-error) 45%, transparent);
   }
 }
 

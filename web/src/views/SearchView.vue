@@ -908,7 +908,7 @@ async function onSearch() {
   flex-shrink: 0;
   transition: background 150ms ease;
 }
-.cancel-btn:hover { background: rgba(248, 81, 73, 0.1); }
+.cancel-btn:hover { background: color-mix(in srgb, var(--color-error) 10%, transparent); }
 .cancel-btn:focus-visible { outline: 2px solid var(--color-error); outline-offset: 2px; }
 
 .save-bookmark-btn {
@@ -1221,8 +1221,8 @@ async function onSearch() {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.3);
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 30%, transparent);
   border-radius: var(--radius-md);
   color: var(--color-error);
   font-size: 0.9375rem;
@@ -1269,8 +1269,8 @@ async function onSearch() {
   display: flex;
   gap: var(--space-3);
   align-items: flex-start;
-  background: rgba(248, 81, 73, 0.08);
-  border: 1px solid rgba(248, 81, 73, 0.35);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent);
   border-radius: var(--radius-lg);
   padding: var(--space-4) var(--space-5);
   font-size: 0.9375rem;
@@ -1556,7 +1556,7 @@ async function onSearch() {
   color: var(--color-error);
 }
 .bulk-bar__btn--danger:hover:not(:disabled) {
-  background: rgba(248, 81, 73, 0.12);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
 }
 
 .bulk-bar__btn--report {

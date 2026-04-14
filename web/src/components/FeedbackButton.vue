@@ -140,11 +140,13 @@ import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps<{ currentView?: string }>()
 
+const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
+
 // Probe once on mount — hidden until confirmed enabled so button never flashes
 const enabled = ref(false)
 onMounted(async () => {
   try {
-    const res = await fetch('/api/feedback/status')
+    const res = await fetch(`${apiBase}/api/feedback/status`)
     if (res.ok) {
       const data = await res.json()
       enabled.value = data.enabled === true
@@ -205,7 +207,7 @@ async function submit() {
   loading.value = true
   submitError.value = ''
   try {
-    const res = await fetch('/api/feedback', {
+    const res = await fetch(`${apiBase}/api/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -237,18 +239,18 @@ async function submit() {
 /* ── Floating action button ─────────────────────────────────────────── */
 .feedback-fab {
   position: fixed;
-  right: var(--spacing-md);
-  bottom: calc(68px + var(--spacing-md)); /* above mobile bottom nav */
+  right: var(--space-4);
+  bottom: calc(68px + var(--space-4)); /* above mobile bottom nav */
   z-index: 190;
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
-  padding: 9px var(--spacing-md);
-  background: var(--color-bg-elevated);
+  gap: var(--space-2);
+  padding: 9px var(--space-4);
+  background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   border-radius: 999px;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
   font-family: var(--font-body);
   font-weight: 500;
   cursor: pointer;
@@ -256,9 +258,9 @@ async function submit() {
   transition: background 0.15s, color 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
 .feedback-fab:hover {
-  background: var(--color-bg-card);
-  color: var(--color-text-primary);
-  border-color: var(--color-border-focus);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border-color: var(--app-primary);
   box-shadow: var(--shadow-lg);
 }
 .feedback-fab-icon { width: 15px; height: 15px; flex-shrink: 0; }
@@ -267,7 +269,7 @@ async function submit() {
 /* On desktop, bottom nav is gone — drop to standard corner */
 @media (min-width: 769px) {
   .feedback-fab {
-    bottom: var(--spacing-lg);
+    bottom: var(--space-6);
   }
 }
 
@@ -286,13 +288,13 @@ async function submit() {
 @media (min-width: 500px) {
   .feedback-overlay {
     align-items: center;
-    padding: var(--spacing-md);
+    padding: var(--space-4);
   }
 }
 
 /* ── Modal ────────────────────────────────────────────────────────────── */
 .feedback-modal {
-  background: var(--color-bg-elevated);
+  background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   width: 100%;
@@ -300,7 +302,7 @@ async function submit() {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
 }
 
 @media (min-width: 500px) {
@@ -316,13 +318,13 @@ async function submit() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--spacing-md) var(--spacing-md) var(--spacing-sm);
+  padding: var(--space-4) var(--space-4) var(--space-3);
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 }
 .feedback-title {
   font-family: var(--font-display);
-  font-size: var(--font-size-lg);
+  font-size: 1.125rem;
   font-weight: 600;
   margin: 0;
 }
@@ -337,23 +339,23 @@ async function submit() {
   align-items: center;
   justify-content: center;
 }
-.feedback-close:hover { color: var(--color-text-primary); }
+.feedback-close:hover { color: var(--color-text); }
 
 .feedback-body {
-  padding: var(--spacing-md);
+  padding: var(--space-4);
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: var(--space-4);
 }
 
 .feedback-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
 }
@@ -362,23 +364,23 @@ async function submit() {
   resize: vertical;
   min-height: 80px;
   font-family: var(--font-body);
-  font-size: var(--font-size-sm);
+  font-size: 0.8125rem;
 }
 
 .form-required { color: var(--color-error); margin-left: 2px; }
 
 .feedback-error {
   color: var(--color-error);
-  font-size: var(--font-size-sm);
+  font-size: 0.8125rem;
   margin: 0;
 }
 
 .feedback-success {
   color: var(--color-success);
-  font-size: var(--font-size-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--color-success-bg);
-  border: 1px solid var(--color-success-border);
+  font-size: 0.8125rem;
+  padding: var(--space-3) var(--space-4);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
   border-radius: var(--radius-md);
 }
 .feedback-link { color: var(--color-success); font-weight: 600; text-decoration: underline; }
@@ -387,15 +389,15 @@ async function submit() {
 .feedback-summary {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
-  padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--color-bg-secondary);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-2);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
 }
 .feedback-summary-row {
   display: flex;
-  gap: var(--spacing-md);
+  gap: var(--space-4);
   align-items: flex-start;
 }
 .feedback-summary-row > :first-child { min-width: 72px; flex-shrink: 0; }
@@ -404,8 +406,115 @@ async function submit() {
   word-break: break-word;
 }
 
-.mt-md { margin-top: var(--spacing-md); }
-.mt-xs { margin-top: var(--spacing-xs); }
+.mt-md { margin-top: var(--space-4); }
+.mt-xs { margin-top: var(--space-2); }
+
+/* ── Form elements ────────────────────────────────────────────────────── */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.form-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.form-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.form-input:focus {
+  outline: none;
+  border-color: var(--app-primary);
+}
+.form-input::placeholder { color: var(--color-text-muted); opacity: 0.7; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--app-primary);
+  color: #fff;
+  border: 1px solid var(--app-primary);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border-color: var(--app-primary);
+}
+
+/* ── Filter chips ─────────────────────────────────────────────────────── */
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.btn-chip {
+  padding: 5px var(--space-3);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-chip.active,
+.btn-chip:hover {
+  background: color-mix(in srgb, var(--app-primary) 15%, transparent);
+  border-color: var(--app-primary);
+  color: var(--app-primary);
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* ── Text utilities ───────────────────────────────────────────────────── */
+.text-muted  { color: var(--color-text-muted); }
+.text-sm     { font-size: 0.8125rem; line-height: 1.5; }
+.font-semibold { font-weight: 600; }
 
 /* Transition */
 .modal-fade-enter-active, .modal-fade-leave-active { transition: opacity 0.2s ease; }

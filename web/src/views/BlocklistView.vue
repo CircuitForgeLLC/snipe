@@ -288,9 +288,9 @@ function formatDate(iso: string | null): string {
   letter-spacing: 0.04em;
 }
 
-.bl-source-badge--manual    { background: rgba(88, 166, 255, 0.15); color: var(--app-primary); }
-.bl-source-badge--csv_import { background: rgba(164, 120, 255, 0.15); color: #a478ff; }
-.bl-source-badge--community  { background: rgba(63, 185, 80, 0.15); color: var(--trust-high); }
+.bl-source-badge--manual    { background: color-mix(in srgb, var(--color-info) 15%, transparent); color: var(--color-info); }
+.bl-source-badge--csv_import { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+.bl-source-badge--community  { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
 
 .bl-remove-btn {
   background: none;
