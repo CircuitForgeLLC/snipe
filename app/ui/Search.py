@@ -1,19 +1,24 @@
 """Main search + results page."""
 from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
+
 import streamlit as st
 from circuitforge_core.config import load_env
+
 from app.db.store import Store
 from app.platforms import PlatformAdapter, SearchFilters
 from app.trust import TrustScorer
-from app.ui.components.filters import build_filter_options, render_filter_sidebar, FilterState
-from app.ui.components.listing_row import render_listing_row
 from app.ui.components.easter_eggs import (
-    inject_steal_css, check_snipe_mode, render_snipe_mode_banner,
     auction_hours_remaining,
+    check_snipe_mode,
+    inject_steal_css,
+    render_snipe_mode_banner,
 )
+from app.ui.components.filters import FilterState, build_filter_options, render_filter_sidebar
+from app.ui.components.listing_row import render_listing_row
 
 log = logging.getLogger(__name__)
 

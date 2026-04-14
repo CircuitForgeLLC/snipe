@@ -3,16 +3,18 @@
 Uses a minimal HTML fixture mirroring eBay's current s-card markup.
 No HTTP requests are made — all tests operate on the pure parsing functions.
 """
-import pytest
 from datetime import timedelta
+
+import pytest
+from bs4 import BeautifulSoup
+
 from app.platforms.ebay.scraper import (
-    scrape_listings,
-    scrape_sellers,
+    _extract_seller_from_card,
     _parse_price,
     _parse_time_left,
-    _extract_seller_from_card,
+    scrape_listings,
+    scrape_sellers,
 )
-from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------------------------
 # Minimal eBay search results HTML fixture (li.s-card schema)

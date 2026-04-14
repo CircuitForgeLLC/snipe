@@ -1,10 +1,12 @@
 """eBay Browse API adapter."""
 from __future__ import annotations
+
 import hashlib
 import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
 import requests
 
 log = logging.getLogger(__name__)
@@ -18,7 +20,7 @@ _SHOPPING_API_MAX_PER_SEARCH = 5          # sellers enriched per search call
 _SHOPPING_API_INTER_REQUEST_DELAY = 0.5   # seconds between successive calls
 _SELLER_ENRICH_TTL_HOURS = 24             # skip re-enrichment within this window
 
-from app.db.models import Listing, Seller, MarketComp
+from app.db.models import Listing, MarketComp, Seller
 from app.db.store import Store
 from app.platforms import PlatformAdapter, SearchFilters
 from app.platforms.ebay.auth import EbayTokenManager

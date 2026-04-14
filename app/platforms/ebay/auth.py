@@ -1,8 +1,10 @@
 """eBay OAuth2 client credentials token manager."""
 from __future__ import annotations
+
 import base64
 import time
 from typing import Optional
+
 import requests
 
 EBAY_OAUTH_URLS = {

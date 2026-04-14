@@ -2,10 +2,10 @@
   <!-- Root uses .app-root class, NOT id="app" — index.html owns #app.
        Nested #app elements cause ambiguous CSS specificity. Gotcha #1. -->
   <div class="app-root" :class="{ 'rich-motion': motion.rich.value }">
+    <!-- Skip to main content — must be first focusable element before the nav -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
     <AppNav />
     <main class="app-main" id="main-content" tabindex="-1">
-      <!-- Skip to main content link (screen reader / keyboard nav) -->
-      <a href="#main-content" class="skip-link">Skip to main content</a>
       <RouterView />
     </main>
 
@@ -22,6 +22,7 @@ import { useSnipeMode } from './composables/useSnipeMode'
 import { useKonamiCode } from './composables/useKonamiCode'
 import { useSessionStore } from './stores/session'
 import { useBlocklistStore } from './stores/blocklist'
+import { usePreferencesStore } from './stores/preferences'
 import AppNav from './components/AppNav.vue'
 import FeedbackButton from './components/FeedbackButton.vue'
 
@@ -29,14 +30,16 @@ const motion = useMotion()
 const { activate, restore } = useSnipeMode()
 const session = useSessionStore()
 const blocklistStore = useBlocklistStore()
+const preferencesStore = usePreferencesStore()
 const route = useRoute()
 
 useKonamiCode(activate)
 
-onMounted(() => {
-  restore()                      // re-apply snipe mode from localStorage on hard reload
-  session.bootstrap()            // fetch tier + feature flags from API
-  blocklistStore.fetchBlocklist() // pre-load so card block buttons reflect state immediately
+onMounted(async () => {
+  restore()                           // re-apply snipe mode from localStorage on hard reload
+  await session.bootstrap()           // fetch tier + feature flags from API
+  blocklistStore.fetchBlocklist()     // pre-load so card block buttons reflect state immediately
+  preferencesStore.load()             // load user preferences after session resolves
 })
 </script>
 

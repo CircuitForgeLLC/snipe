@@ -163,8 +163,11 @@ export const useSearchStore = defineStore('search', () => {
       // VITE_API_BASE is '' in dev; '/snipe' under menagerie (baked at build time by Vite)
       const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
       const params = new URLSearchParams({ q })
-      if (filters.maxPrice != null) params.set('max_price', String(filters.maxPrice))
-      if (filters.minPrice != null) params.set('min_price', String(filters.minPrice))
+      // v-model.number sends empty string when a number input is cleared — guard against that
+      const maxPrice = Number(filters.maxPrice)
+      const minPrice = Number(filters.minPrice)
+      if (Number.isFinite(maxPrice) && maxPrice > 0) params.set('max_price', String(maxPrice))
+      if (Number.isFinite(minPrice) && minPrice > 0) params.set('min_price', String(minPrice))
       if (filters.pages != null && filters.pages > 1) params.set('pages', String(filters.pages))
       if (filters.mustInclude?.trim()) params.set('must_include', filters.mustInclude.trim())
       if (filters.mustIncludeMode) params.set('must_include_mode', filters.mustIncludeMode)

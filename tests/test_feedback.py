@@ -4,11 +4,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
+from circuitforge_core.api.feedback import make_feedback_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from circuitforge_core.api.feedback import make_feedback_router
-
 
 # ── Test app factory ──────────────────────────────────────────────────────────
 

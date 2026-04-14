@@ -1,7 +1,9 @@
 """Perceptual hash deduplication within a result set (free tier, v0.1)."""
 from __future__ import annotations
-from typing import Optional
+
 import io
+from typing import Optional
+
 import requests
 
 try:

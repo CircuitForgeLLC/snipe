@@ -1,7 +1,9 @@
 import time
-import requests
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
+import requests
+
 from app.platforms.ebay.auth import EbayTokenManager
 
 

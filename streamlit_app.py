@@ -1,6 +1,8 @@
 """Streamlit entrypoint."""
 from pathlib import Path
+
 import streamlit as st
+
 from app.wizard import SnipeSetupWizard
 
 st.set_page_config(
@@ -16,6 +18,7 @@ if not wizard.is_configured():
     st.stop()
 
 from app.ui.components.easter_eggs import inject_konami_detector
+
 inject_konami_detector()
 
 with st.sidebar:
@@ -27,4 +30,5 @@ with st.sidebar:
     )
 
 from app.ui.Search import render
+
 render(audio_enabled=audio_enabled)

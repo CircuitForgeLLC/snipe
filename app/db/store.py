@@ -1,5 +1,6 @@
 """Thin SQLite read/write layer for all Snipe models."""
 from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Optional
 
 from circuitforge_core.db import get_connection, run_migrations
 
-from .models import Listing, Seller, TrustScore, MarketComp, SavedSearch, ScammerEntry
+from .models import Listing, MarketComp, SavedSearch, ScammerEntry, Seller, TrustScore
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -380,6 +381,59 @@ class Store:
             )
             for r in rows
         ]
+
+    def save_community_signal(self, seller_id: str, confirmed: bool) -> None:
+        """Record a user's trust-score feedback signal into the shared DB."""
+        self._conn.execute(
+            "INSERT INTO community_signals (seller_id, confirmed) VALUES (?, ?)",
+            (seller_id, 1 if confirmed else 0),
+        )
+        self._conn.commit()
+
+    # --- User Preferences ---
+
+    def get_user_preference(self, path: str, default=None):
+        """Read a preference value at dot-separated path (e.g. 'affiliate.opt_out').
+
+        Reads from the singleton user_preferences row; returns *default* if the
+        table is empty or the path is not set.
+        """
+        from circuitforge_core.preferences.paths import get_path
+        row = self._conn.execute(
+            "SELECT prefs_json FROM user_preferences WHERE id=1"
+        ).fetchone()
+        if not row:
+            return default
+        return get_path(json.loads(row[0]), path, default=default)
+
+    def set_user_preference(self, path: str, value) -> None:
+        """Write *value* at dot-separated path (immutable JSON update).
+
+        Creates the singleton row on first write; merges subsequent updates
+        so sibling paths are preserved.
+        """
+        from circuitforge_core.preferences.paths import set_path
+        row = self._conn.execute(
+            "SELECT prefs_json FROM user_preferences WHERE id=1"
+        ).fetchone()
+        prefs = json.loads(row[0]) if row else {}
+        updated = set_path(prefs, path, value)
+        self._conn.execute(
+            "INSERT INTO user_preferences (id, prefs_json, updated_at) "
+            "VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "  prefs_json = excluded.prefs_json, "
+            "  updated_at = excluded.updated_at",
+            (json.dumps(updated),),
+        )
+        self._conn.commit()
+
+    def get_all_preferences(self) -> dict:
+        """Return all preferences as a plain dict (empty dict if not yet set)."""
+        row = self._conn.execute(
+            "SELECT prefs_json FROM user_preferences WHERE id=1"
+        ).fetchone()
+        return json.loads(row[0]) if row else {}
 
     def get_market_comp(self, platform: str, query_hash: str) -> Optional[MarketComp]:
         row = self._conn.execute(

@@ -10,8 +10,9 @@ export function useTrustFeedback(sellerId: string) {
   async function submitFeedback(confirmed: boolean): Promise<void> {
     if (state.value !== 'idle') return
     state.value = 'sending'
+    const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
     try {
-      await fetch('/api/community/signal', {
+      await fetch(`${apiBase}/api/community/signal`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seller_id: sellerId, confirmed }),

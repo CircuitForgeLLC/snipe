@@ -1,7 +1,9 @@
 """Five metadata trust signals, each scored 0–20."""
 from __future__ import annotations
+
 import json
 from typing import Optional
+
 from app.db.models import Seller
 
 ELECTRONICS_CATEGORIES = {"ELECTRONICS", "COMPUTERS_TABLETS", "VIDEO_GAMES", "CELL_PHONES"}
