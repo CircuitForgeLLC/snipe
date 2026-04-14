@@ -85,9 +85,9 @@
 
       <label class="settings-toggle">
         <div class="settings-toggle-text">
-          <span class="settings-toggle-label">Auto-run after Build with AI</span>
+          <span class="settings-toggle-label">Auto-run after Search with AI</span>
           <span class="settings-toggle-desc">
-            When enabled, Snipe starts searching immediately after the AI fills in your filters.
+            When enabled, Snipe starts searching immediately after AI fills in your filters.
             Disable to review the filters before searching.
           </span>
         </div>
@@ -95,7 +95,7 @@
           class="toggle-btn"
           :class="{ 'toggle-btn--on': llmAutoRun }"
           :aria-pressed="String(llmAutoRun)"
-          aria-label="Run search automatically after AI builds filters"
+          aria-label="Run search automatically after Search with AI"
           @click="setLLMAutoRun(!llmAutoRun)"
         >
           <span class="toggle-btn__track" />
