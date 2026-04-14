@@ -1,15 +1,14 @@
 # Tier System
 
-Snipe uses Circuit Forge's standard four-tier model.
+Snipe uses CircuitForge's three-tier model.
 
 ## Tiers
 
 | Tier | Price | Key features |
 |------|-------|-------------|
 | **Free** | Free | Search, trust scoring, red flags, blocklist, market comps, affiliate links, saved searches |
-| **Paid** | $4.99/mo or $129 lifetime | Photo analysis, background monitoring (up to 5 searches), serial number check |
-| **Premium** | $9.99/mo or $249 lifetime | All Paid features, background monitoring (up to 25), custom affiliate ID (BYOK EPN) |
-| **Ultra** | Contact us | Human-in-the-loop assistance |
+| **Paid** | $5/mo or $129 lifetime | Photo analysis, background monitoring (up to 5 searches), serial number check |
+| **Premium** | $10/mo or $249 lifetime | All Paid features, background monitoring (up to 25), custom affiliate ID (BYOK EPN) |
 
 ## Free tier philosophy
 
