@@ -6,6 +6,46 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.0] — 2026-04-14
+
+### Added
+
+**Search with AI** — natural language to eBay search filters (closes #29, Paid+ tier)
+
+- `QueryTranslator`: sends a free-text prompt to a local LLM (via cf-orch, defaulting to `llama3.1:8b`) with a domain-aware system prompt and eBay Taxonomy category hints. Returns structured `SearchParamsResponse` (keywords, price range, condition, category, sort order, pages).
+- `EbayCategoryCache`: bootstraps from a seed list; refreshes from the eBay Browse API Taxonomy endpoint on a 7-day TTL. `get_relevant(query)` injects the 10 closest categories into the system prompt to reduce hallucinated filter values.
+- `POST /api/search/build` — tier-gated endpoint (paid+) that accepts `{"prompt": "..."}` and returns populated `SearchParamsResponse`. Wired to `LLMRouter` via the Peregrine-style shim.
+- `LLMQueryPanel.vue`: collapsible panel above the search form with a text area, a "Search with AI" button, and an auto-run toggle. A11y (accessibility): `aria-expanded`, `aria-controls`, `aria-live="polite"` on status, keyboard-navigable, `prefers-reduced-motion` guard on collapse animation.
+- `useLLMQueryBuilder` composable: manages `buildQuery()` state machine (`idle | loading | done | error`), exposes `autoRun` flag, calls `populateFromLLM()` on the search store.
+- `SettingsView`: new "Search with AI" section with the auto-run toggle persisted to user preferences.
+- `search.ts`: `populateFromLLM()` merges LLM-returned filters into the store; guards `v-model.number` empty-string edge case (cleared price inputs sent `NaN` to the API).
+
+**Preferences system**
+
+- `Store.get_user_preference` / `set_user_preference` / `get_all_preferences`: dot-path read/write over a singleton `user_preferences` JSON row (immutable update pattern via `circuitforge_core.preferences.paths`).
+- `Store.save_community_signal`: persists trust feedback signals to `community_signals` table.
+- `preferencesStore` (Pinia): loaded after session bootstrap; `load()` / `set()` / `get()` surface preferences to Vue components.
+
+**Community module** (closes #31 #32 #33)
+
+- `corrections` router wired: `POST /api/community/signal` now lands in SQLite `community_signals`.
+- `COMMUNITY_DB_URL` env var documented in `.env.example`.
+
+### Fixed
+
+- `useTrustFeedback`: prefixes fetch URL with `VITE_API_BASE` so feedback signals route correctly under menagerie reverse proxy.
+- `App.vue`: skip-to-main link moved before `<AppNav>` so keyboard users reach it as the first focusable element (WCAG 2.4.1 bypass-blocks compliance).
+- `@/` path alias removed from Vue components (Vite config had no alias configured; replaced with relative imports to fix production build).
+- `search.ts`: LLM-populated filters now sync back into `SearchView` local state so the form reflects the AI-generated values immediately.
+- Python import ordering pass (isort) across adapters, trust modules, tasks, and test files.
+
+### Closed
+
+- `#29` LLM query builder — shipped.
+- `#31` `#32` `#33` Community corrections router — shipped.
+
+---
+
 ## [0.3.0] — 2026-04-14
 
 ### Added
