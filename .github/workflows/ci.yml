@@ -1,0 +1,62 @@
+# Snipe CI — runs on GitHub mirror for public credibility badge.
+# Forgejo (.forgejo/workflows/ci.yml) is the canonical CI — keep these in sync.
+# No Forgejo-specific secrets used here; circuitforge-core is public on Forgejo.
+#
+# Note: playwright browser binaries are not installed here — tests using
+# headed Chromium (Kasada bypass) are skipped in CI via pytest marks.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install circuitforge-core
+        run: pip install git+https://git.opensourcesolarpunk.com/Circuit-Forge/circuitforge-core.git@main
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v --tb=short -m "not browser"
+
+  frontend:
+    name: Frontend (Vue)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx vue-tsc --noEmit
+
+      - name: Test
+        run: npm run test
