@@ -6,6 +6,46 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.0] — 2026-04-16
+
+### Added
+
+**Listing detail page** — full trust breakdown for any individual listing (closes placeholder)
+
+- `ListingView.vue` rewritten from "coming soon" stub into a full trust breakdown view.
+- SVG trust ring: `stroke-dasharray` fill proportional to composite score (0–100), colour-coded `lv-ring--high/mid/low` (≥80 / 50–79 / <50).
+- Five-signal breakdown table: account age, feedback count, feedback ratio, price vs. market, category history — each row shows score, max, and a plain-English label.
+- Red flag badges: hard flags (`.lv-flag--hard`) for `new_account`, `suspicious_price`, `duplicate_photo`, `zero_feedback`, `established_bad_actor`; soft flags (`.lv-flag--soft`) for `scratch_dent_mentioned`, `long_on_market`, `significant_price_drop`, `account_under_30_days`.
+- Triple Red easter egg: new/under-30-days account + suspicious price + photo/actor/zero-feedback/scratch flag combination triggers pulsing red glow animation.
+- Partial score warning: `score_is_partial` flag shows `.lv-verdict__partial` notice and "pending" in affected signal rows.
+- Seller panel: username, account age, feedback count/ratio, category history JSON, inline block-seller form.
+- Photo carousel: thumbnail strip with keyboard-navigable main image.
+- Not-found state for direct URL navigation when store is empty.
+- `getListing(platformListingId)` getter added to search store.
+- `ListingCard.vue`: "Details" link wired to `/listing/:id` route.
+
+**Theme override** — user-controlled dark/light/system toggle in Settings
+
+- `useTheme` composable: module-level `mode` ref, `setMode()` writes `data-theme` attribute + localStorage, `restore()` re-reads localStorage on hard reload.
+- `theme.css`: explicit `[data-theme="dark"]` and `[data-theme="light"]` attribute selector blocks so user preference beats OS media query. Snipe mode override preserved.
+- `SettingsView.vue`: new Appearance section with System/Dark/Light segmented button group.
+- `App.vue`: `restoreTheme()` called in `onMounted` alongside snipe mode restore.
+
+**Frontend test suite** — 32 Vitest tests, all green
+
+- `useTheme.test.ts` (7 tests): defaults, setMode, data-theme attribute, localStorage persistence, restore() behaviour.
+- `searchStore.test.ts` (7 tests): getListing() edge cases, pipe characters in IDs, trustScores/sellers map lookups.
+- `ListingView.test.ts` (18 tests): not-found state, title/price/score/signals/seller rendering, hard/soft flag badges, no-flags, triple-red class, partial/pending signals, ring colour classes.
+
+### Fixed
+
+- `useTheme.restore()` re-reads from localStorage instead of cached module-level ref — prevented correct theme restore after a `setMode()` call in the same JS session.
+- Landing hero subtitle rewritten with narrative opener ("Seen a listing that looks almost too good to pass up?") — universal framing, no category assumptions.
+- eBay cancellation callout CTA updated to "Search above to score listings before you commit" — direct action vs. passive notice.
+- Tile descriptions: concrete examples added ("40% below median", quoted "scratch and dent") for instant domain recognition.
+
+---
+
 ## [0.4.0] — 2026-04-14
 
 ### Added
