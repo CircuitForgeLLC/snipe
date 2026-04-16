@@ -6,6 +6,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.1] — 2026-04-16
+
+### Added
+
+**Reported sellers tracking** — after bulk-reporting sellers to eBay Trust & Safety, cards show a muted "Reported to eBay" badge so users know not to re-report the same seller.
+
+- Migration 012: `reported_sellers` table in user DB (UNIQUE on platform + seller ID, preserves first-report timestamp on re-report).
+- `Store.mark_reported` / `list_reported` methods.
+- `POST /api/reported` + `GET /api/reported` endpoints.
+- `reported` Pinia store: optimistic local update, best-effort server persistence.
+- `ListingCard`: accepts `sellerReported` prop; shows `.card__reported-badge` when true.
+- `App.vue`: loads reported store at startup alongside blocklist.
+
+**Community blocklist share toggle** — Settings > Community section (signed-in users only, default OFF).
+
+- Toggle persisted as `community.blocklist_share` via existing user preferences path system.
+- Backend `add_to_blocklist` now gates community signal publishing on opt-in preference; privacy-by-architecture: sharing is never implicit.
+
+### Fixed
+
+- SSE live score push (snipe#1) verified working end-to-end: enrichment thread correctly streams re-scored trust scores via `SimpleQueue → StreamingResponse` generator, terminates with `event: done`. Closed.
+
+---
+
 ## [0.5.0] — 2026-04-16
 
 ### Added
