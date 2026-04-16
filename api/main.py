@@ -38,7 +38,33 @@ from app.platforms.ebay.scraper import ScrapedEbayAdapter
 from app.trust import TrustScorer
 
 load_env(Path(".env"))
+
+# Wire the app logger into Uvicorn's handler chain so application-level
+# log.info() calls appear in docker logs alongside the access log.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s: %(message)s",
+)
 log = logging.getLogger(__name__)
+
+
+def _auth_label(user_id: str) -> str:
+    """Classify a user_id into a short tag for structured log lines.
+
+    Intentionally coarse — no PII, just enough to distinguish traffic types:
+      local   → local dev instance (not cloud)
+      anon    → fresh visitor, no cookie yet
+      guest   → returning anonymous visitor with snipe_guest cookie
+      authed  → authenticated Directus account
+    """
+    if user_id == "local":
+        return "local"
+    if user_id == "anonymous":
+        return "anon"
+    if user_id.startswith("guest:"):
+        return "guest"
+    return "authed"
+
 
 # ── SSE update registry ───────────────────────────────────────────────────────
 # Maps session_id → SimpleQueue of update events.
@@ -222,6 +248,9 @@ def session_info(response: Response, session: CloudUser = Depends(get_session)):
             shared_db=session.shared_db,
             user_db=session.user_db,
         )
+        log.info("session new_guest user_id=%s", guest_uuid)
+    else:
+        log.info("session auth=%s tier=%s", _auth_label(session.user_id), session.tier)
     features = compute_features(session.tier)
     return {
         "user_id": session.user_id,
@@ -524,7 +553,11 @@ def search(
         log.warning("eBay scrape failed: %s", e)
         raise HTTPException(status_code=502, detail=f"eBay search failed: {e}")
 
-    log.info("Multi-search: %d queries → %d unique listings", len(ebay_queries), len(listings))
+    log.info(
+        "search auth=%s tier=%s adapter=%s pages=%d queries=%d listings=%d q=%r",
+        _auth_label(session.user_id), session.tier, adapter_used,
+        pages, len(ebay_queries), len(listings), q,
+    )
 
     # Main-thread stores — fresh connections, same thread.
     # shared_store: sellers, market_comps (all users share this data)
