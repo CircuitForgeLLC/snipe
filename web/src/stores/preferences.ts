@@ -9,6 +9,9 @@ export interface UserPreferences {
       ebay?: string
     }
   }
+  community?: {
+    blocklist_share?: boolean
+  }
 }
 
 const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
@@ -21,6 +24,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
 
   const affiliateOptOut = computed(() => prefs.value.affiliate?.opt_out ?? false)
   const affiliateByokId = computed(() => prefs.value.affiliate?.byok_ids?.ebay ?? '')
+  const communityBlocklistShare = computed(() => prefs.value.community?.blocklist_share ?? false)
 
   async function load() {
     if (!session.isLoggedIn) return
@@ -67,14 +71,20 @@ export const usePreferencesStore = defineStore('preferences', () => {
     await setPref('affiliate.byok_ids.ebay', id.trim() || null)
   }
 
+  async function setCommunityBlocklistShare(value: boolean) {
+    await setPref('community.blocklist_share', value)
+  }
+
   return {
     prefs,
     loading,
     error,
     affiliateOptOut,
     affiliateByokId,
+    communityBlocklistShare,
     load,
     setAffiliateOptOut,
     setAffiliateByokId,
+    setCommunityBlocklistShare,
   }
 })

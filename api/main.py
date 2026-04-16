@@ -905,9 +905,12 @@ def add_to_blocklist(body: BlocklistAdd, session: CloudUser = Depends(get_sessio
         source="manual",
     ))
 
-    # Publish seller trust signal to community DB (fire-and-forget; never fails the request).
+    # Publish to community DB only if the user has opted in via community.blocklist_share.
+    # Privacy-by-architecture: default is OFF; the user must explicitly enable sharing.
+    user_store = Store(session.user_db)
+    share_enabled = user_store.get_user_preference("community.blocklist_share", default=False)
     cs = _get_community_store()
-    if cs is not None:
+    if cs is not None and share_enabled:
         try:
             cs.publish_seller_signal(
                 platform_seller_id=body.platform_seller_id,
@@ -990,6 +993,40 @@ async def import_blocklist(
 
     log.info("Blocklist import: %d added, %d errors", imported, len(errors))
     return {"imported": imported, "errors": errors}
+
+
+# ── Reported Sellers ─────────────────────────────────────────────────────────
+
+class ReportedSellerEntry(BaseModel):
+    platform_seller_id: str
+    username: Optional[str] = None
+
+
+class ReportBatch(BaseModel):
+    sellers: list[ReportedSellerEntry]
+
+
+@app.post("/api/reported", status_code=204)
+def record_reported(body: ReportBatch, session: CloudUser = Depends(get_session)):
+    """Record that the user has filed eBay T&S reports for the given sellers.
+
+    Stored in the user DB so they don't get prompted to re-report the same seller.
+    """
+    user_store = Store(session.user_db)
+    for entry in body.sellers:
+        user_store.mark_reported(
+            platform="ebay",
+            platform_seller_id=entry.platform_seller_id,
+            username=entry.username,
+            reported_by="bulk_action",
+        )
+
+
+@app.get("/api/reported")
+def list_reported(session: CloudUser = Depends(get_session)) -> dict:
+    """Return the set of platform_seller_ids already reported by this user."""
+    ids = Store(session.user_db).list_reported("ebay")
+    return {"reported": ids}
 
 
 # ── User Preferences ──────────────────────────────────────────────────────────

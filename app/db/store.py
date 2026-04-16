@@ -382,6 +382,35 @@ class Store:
             for r in rows
         ]
 
+    # --- Reported Sellers ---
+
+    def mark_reported(
+        self,
+        platform: str,
+        platform_seller_id: str,
+        username: Optional[str] = None,
+        reported_by: str = "user",
+    ) -> None:
+        """Record that the user has filed an eBay T&S report for this seller.
+
+        Uses IGNORE on conflict so the first-report timestamp is preserved.
+        """
+        self._conn.execute(
+            "INSERT OR IGNORE INTO reported_sellers "
+            "(platform, platform_seller_id, username, reported_by) "
+            "VALUES (?,?,?,?)",
+            (platform, platform_seller_id, username, reported_by),
+        )
+        self._conn.commit()
+
+    def list_reported(self, platform: str = "ebay") -> list[str]:
+        """Return all platform_seller_ids that have been reported."""
+        rows = self._conn.execute(
+            "SELECT platform_seller_id FROM reported_sellers WHERE platform=?",
+            (platform,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def save_community_signal(self, seller_id: str, confirmed: bool) -> None:
         """Record a user's trust-score feedback signal into the shared DB."""
         self._conn.execute(

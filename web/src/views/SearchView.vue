@@ -434,6 +434,7 @@
               :market-price="store.marketPrice"
               :selected="selectedIds.has(listing.platform_listing_id)"
               :select-mode="selectMode"
+              :seller-reported="reported.isReported(listing.seller_platform_id)"
               @toggle="toggleSelect(listing.platform_listing_id)"
             />
           </div>
@@ -452,6 +453,7 @@ import type { Listing, TrustScore, SearchFilters, MustIncludeMode } from '../sto
 import { useSavedSearchesStore } from '../stores/savedSearches'
 import { useSessionStore } from '../stores/session'
 import { useBlocklistStore } from '../stores/blocklist'
+import { useReportedStore } from '../stores/reported'
 import ListingCard from '../components/ListingCard.vue'
 import LLMQueryPanel from '../components/LLMQueryPanel.vue'
 
@@ -460,6 +462,7 @@ const store = useSearchStore()
 const savedStore = useSavedSearchesStore()
 const session = useSessionStore()
 const blocklist = useBlocklistStore()
+const reported = useReportedStore()
 const queryInput = ref('')
 
 // ── Multi-select + bulk actions ───────────────────────────────────────────────
@@ -519,6 +522,7 @@ async function blockSelected() {
 function reportSelected() {
   const toReport = visibleListings.value.filter(l => selectedIds.value.has(l.platform_listing_id))
   // De-duplicate by seller — one report per seller covers all their listings
+  const reportedEntries: Array<{ platform_seller_id: string; username: string | null }> = []
   const seenSellers = new Set<string>()
   for (const l of toReport) {
     if (l.seller_platform_id && !seenSellers.has(l.seller_platform_id)) {
@@ -530,7 +534,11 @@ function reportSelected() {
         '_blank',
         'noopener,noreferrer',
       )
+      reportedEntries.push({ platform_seller_id: l.seller_platform_id, username: seller?.username ?? null })
     }
+  }
+  if (reportedEntries.length) {
+    reported.markReported(reportedEntries)
   }
   clearSelection()
 }

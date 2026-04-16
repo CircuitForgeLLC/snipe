@@ -81,6 +81,9 @@
           {{ flagLabel(flag) }}
         </span>
       </div>
+      <p v-if="sellerReported" class="card__reported-badge" aria-label="You reported this seller to eBay">
+        ⚐ Reported to eBay
+      </p>
       <p v-if="pendingSignalNames.length" class="card__score-pending">
         ↻ Updating: {{ pendingSignalNames.join(', ') }}
       </p>
@@ -203,6 +206,7 @@ const props = defineProps<{
   marketPrice: number | null
   selected?: boolean
   selectMode?: boolean
+  sellerReported?: boolean
 }>()
 
 const emit = defineEmits<{ toggle: [] }>()
@@ -527,6 +531,17 @@ const formattedMarket = computed(() => {
   border-radius: var(--radius-sm);
   font-size: 0.6875rem;
   font-weight: 600;
+}
+
+.card__reported-badge {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-text-muted) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-text-muted) 20%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  margin: 0;
+  display: inline-block;
 }
 
 .card__partial-warning {

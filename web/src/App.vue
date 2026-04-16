@@ -24,6 +24,7 @@ import { useKonamiCode } from './composables/useKonamiCode'
 import { useSessionStore } from './stores/session'
 import { useBlocklistStore } from './stores/blocklist'
 import { usePreferencesStore } from './stores/preferences'
+import { useReportedStore } from './stores/reported'
 import AppNav from './components/AppNav.vue'
 import FeedbackButton from './components/FeedbackButton.vue'
 
@@ -33,6 +34,7 @@ const { restore: restoreTheme } = useTheme()
 const session = useSessionStore()
 const blocklistStore = useBlocklistStore()
 const preferencesStore = usePreferencesStore()
+const reportedStore = useReportedStore()
 const route = useRoute()
 
 useKonamiCode(activate)
@@ -43,6 +45,7 @@ onMounted(async () => {
   await session.bootstrap()           // fetch tier + feature flags from API
   blocklistStore.fetchBlocklist()     // pre-load so card block buttons reflect state immediately
   preferencesStore.load()             // load user preferences after session resolves
+  reportedStore.load()                // pre-load reported sellers so cards show badge immediately
 })
 </script>
 

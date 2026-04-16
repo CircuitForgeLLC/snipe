@@ -24,6 +24,29 @@
           <span class="toggle-btn__thumb" />
         </button>
       </label>
+
+      <!-- Community blocklist share — cloud signed-in users only -->
+      <label v-if="session.isLoggedIn" class="settings-toggle">
+        <div class="settings-toggle-text">
+          <span class="settings-toggle-label">Share blocklist with community</span>
+          <span class="settings-toggle-desc">
+            When enabled, sellers you block are anonymously contributed to the
+            community blocklist. Only the seller ID and flag reason are shared,
+            never your identity. A consensus threshold prevents false positives.
+          </span>
+        </div>
+        <button
+          class="toggle-btn"
+          :class="{ 'toggle-btn--on': communityBlocklistShare }"
+          :aria-pressed="String(communityBlocklistShare)"
+          :aria-busy="prefs.loading"
+          aria-label="Share blocked sellers with community blocklist"
+          @click="prefs.setCommunityBlocklistShare(!communityBlocklistShare)"
+        >
+          <span class="toggle-btn__track" />
+          <span class="toggle-btn__thumb" />
+        </button>
+      </label>
     </section>
 
     <!-- Appearance -->
@@ -129,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useTrustSignalPref } from '../composables/useTrustSignalPref'
 import { useTheme } from '../composables/useTheme'
 import { useSessionStore } from '../stores/session'
@@ -146,6 +169,7 @@ const themeOptions: { value: 'system' | 'dark' | 'light'; label: string }[] = [
 const session = useSessionStore()
 const prefs = usePreferencesStore()
 const { autoRun: llmAutoRun, setAutoRun: setLLMAutoRun } = useLLMQueryBuilder()
+const communityBlocklistShare = computed(() => prefs.communityBlocklistShare)
 
 // Local input buffer for BYOK ID — synced from store, saved on blur/enter
 const byokInput = ref(prefs.affiliateByokId)
