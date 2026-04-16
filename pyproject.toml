@@ -39,6 +39,9 @@ include = ["app*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "browser: tests that require a headed Chromium browser (Xvfb + playwright install required)",
+]
 
 [tool.ruff]
 line-length = 100
