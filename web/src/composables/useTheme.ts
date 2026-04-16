@@ -26,7 +26,9 @@ export function useTheme() {
 
   /** Re-apply from localStorage on hard reload (call from App.vue onMounted). */
   function restore() {
-    _apply(mode.value)
+    const saved = (localStorage.getItem(LS_KEY) as ThemeMode) ?? 'system'
+    mode.value = saved
+    _apply(saved)
   }
 
   return { mode, setMode, restore }

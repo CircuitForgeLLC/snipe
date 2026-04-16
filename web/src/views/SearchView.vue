@@ -311,9 +311,9 @@
           <div class="landing-hero__eyebrow" aria-hidden="true">🎯 Snipe</div>
           <h1 class="landing-hero__headline">Bid with confidence.</h1>
           <p class="landing-hero__sub">
-            Snipe scores eBay listings and sellers for trustworthiness before you place a bid.
-            Catches new accounts, suspicious prices, duplicate photos, and known scammers.
-            Free. No account required.
+            Seen a listing that looks almost too good to pass up? Snipe tells you if it's safe
+            to bid: seller account age, feedback history, price vs. completed sales, and red flag
+            detection — one trust score before you commit. Free. No account required.
           </p>
 
           <!-- Timely callout: eBay cancellation policy change -->
@@ -321,7 +321,7 @@
             <span class="landing-hero__callout-icon" aria-hidden="true">⚠</span>
             <p>
               <strong>Starting May 13, 2026, eBay removes the option for buyers to cancel winning bids.</strong>
-              Auction sales become final. Know what you're buying before you bid.
+              Auction sales become final. Search above to score listings before you commit.
             </p>
           </div>
 
@@ -330,24 +330,24 @@
             <div class="landing-hero__tile" role="listitem">
               <span class="landing-hero__tile-icon" aria-hidden="true">🛡</span>
               <strong class="landing-hero__tile-title">Seller trust score</strong>
-              <p class="landing-hero__tile-desc">Feedback count and ratio, account age, and category history — scored 0 to 100.</p>
+              <p class="landing-hero__tile-desc">Account age, feedback count and ratio, and category history — does this seller actually know what they're selling? Scored 0–100.</p>
             </div>
             <div class="landing-hero__tile" role="listitem">
               <span class="landing-hero__tile-icon" aria-hidden="true">📊</span>
               <strong class="landing-hero__tile-title">Price vs. market</strong>
-              <p class="landing-hero__tile-desc">Compared against recent completed sales. Flags prices that are suspiciously below market.</p>
+              <p class="landing-hero__tile-desc">Checked against recent completed eBay sales. If the price is 40% below median, you'll see it flagged before you bid.</p>
             </div>
             <div class="landing-hero__tile" role="listitem">
               <span class="landing-hero__tile-icon" aria-hidden="true">🚩</span>
               <strong class="landing-hero__tile-title">Red flag detection</strong>
-              <p class="landing-hero__tile-desc">Duplicate photos, damage mentions, established bad actors, and zero-feedback sellers.</p>
+              <p class="landing-hero__tile-desc">Duplicate listing photos, "scratch and dent" buried in the description, zero-feedback sellers, and known bad actors — flagged automatically.</p>
             </div>
           </div>
 
           <!-- Sign-in unlock strip (cloud, unauthenticated only) -->
           <div v-if="session.isCloud && !session.isLoggedIn" class="landing-hero__signin-strip">
             <p class="landing-hero__signin-text">
-              Free account unlocks saved searches, more results pages, and the community scammer blocklist.
+              Free account unlocks saved searches, up to 5 pages of results, and the community-maintained scammer blocklist.
             </p>
             <a href="https://circuitforge.tech/login" class="landing-hero__signin-cta">
               Create a free account →
