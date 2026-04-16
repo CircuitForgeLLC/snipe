@@ -26,6 +26,28 @@
       </label>
     </section>
 
+    <!-- Appearance -->
+    <section class="settings-section">
+      <h2 class="settings-section-title">Appearance</h2>
+      <div class="settings-toggle">
+        <div class="settings-toggle-text">
+          <span class="settings-toggle-label">Theme</span>
+          <span class="settings-toggle-desc">Override the system color scheme. Default follows your OS preference.</span>
+        </div>
+        <div class="theme-btn-group" role="group" aria-label="Theme selection">
+          <button
+            v-for="opt in themeOptions"
+            :key="opt.value"
+            class="theme-btn"
+            :class="{ 'theme-btn--active': theme.mode.value === opt.value }"
+            :aria-pressed="theme.mode.value === opt.value"
+            type="button"
+            @click="theme.setMode(opt.value)"
+          >{{ opt.label }}</button>
+        </div>
+      </div>
+    </section>
+
     <!-- Affiliate Links — only shown to signed-in cloud users -->
     <section v-if="session.isLoggedIn" class="settings-section">
       <h2 class="settings-section-title">Affiliate Links</h2>
@@ -109,11 +131,18 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useTrustSignalPref } from '../composables/useTrustSignalPref'
+import { useTheme } from '../composables/useTheme'
 import { useSessionStore } from '../stores/session'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLLMQueryBuilder } from '../composables/useLLMQueryBuilder'
 
 const { enabled: trustSignalEnabled, setEnabled } = useTrustSignalPref()
+const theme = useTheme()
+const themeOptions: { value: 'system' | 'dark' | 'light'; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'dark',   label: 'Dark' },
+  { value: 'light',  label: 'Light' },
+]
 const session = useSessionStore()
 const prefs = usePreferencesStore()
 const { autoRun: llmAutoRun, setAutoRun: setLLMAutoRun } = useLLMQueryBuilder()
@@ -291,5 +320,33 @@ function saveByokId() {
   font-size: 0.8125rem;
   color: var(--color-danger, #f85149);
   margin: 0;
+}
+
+.theme-btn-group {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.theme-btn {
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition), color var(--transition);
+}
+.theme-btn:last-child { border-right: none; }
+.theme-btn:hover { background: var(--color-surface-raised); color: var(--color-text); }
+.theme-btn--active {
+  background: var(--app-primary-light);
+  color: var(--app-primary);
+  font-weight: 600;
 }
 </style>

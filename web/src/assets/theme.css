@@ -80,8 +80,34 @@
    Warm cream surfaces with the same amber accent.
    Snipe Mode data attribute overrides this via higher specificity.
 */
+/* Explicit dark override — beats OS preference when user forces dark in Settings */
+[data-theme="dark"]:not([data-snipe-mode="active"]) {
+  --color-surface:        #0d1117;
+  --color-surface-2:      #161b22;
+  --color-surface-raised: #1c2129;
+  --color-border:         #30363d;
+  --color-border-light:   #21262d;
+  --color-text:           #e6edf3;
+  --color-text-muted:     #8b949e;
+  --color-text-inverse:   #0d1117;
+  --app-primary:          #f59e0b;
+  --app-primary-hover:    #d97706;
+  --app-primary-light:    rgba(245, 158, 11, 0.12);
+  --trust-high: #3fb950;
+  --trust-mid:  #d29922;
+  --trust-low:  #f85149;
+  --color-success: #3fb950;
+  --color-error:   #f85149;
+  --color-warning: #d29922;
+  --color-info:    #58a6ff;
+  --color-accent:  #a478ff;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4),  0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.6), 0 4px 8px rgba(0,0,0,0.3);
+}
+
 @media (prefers-color-scheme: light) {
-  :root:not([data-snipe-mode="active"]) {
+  :root:not([data-theme="dark"]):not([data-snipe-mode="active"]) {
     /* Surfaces — warm cream, like a tactical field notebook */
     --color-surface:        #f8f5ee;
     --color-surface-2:      #f0ece3;
@@ -118,6 +144,32 @@
     --shadow-md: 0 4px 12px rgba(60, 45, 20, 0.15), 0 2px 4px rgba(60, 45, 20, 0.1);
     --shadow-lg: 0 10px 30px rgba(60, 45, 20, 0.2), 0 4px 8px rgba(60, 45, 20, 0.1);
   }
+}
+
+/* Explicit light override — beats OS preference when user forces light in Settings */
+[data-theme="light"]:not([data-snipe-mode="active"]) {
+  --color-surface:        #f8f5ee;
+  --color-surface-2:      #f0ece3;
+  --color-surface-raised: #e8e3d8;
+  --color-border:         #c8bfae;
+  --color-border-light:   #dbd3c4;
+  --color-text:           #1c1a16;
+  --color-text-muted:     #6b6357;
+  --color-text-inverse:   #f8f5ee;
+  --app-primary:          #d97706;
+  --app-primary-hover:    #b45309;
+  --app-primary-light:    rgba(217, 119, 6, 0.12);
+  --trust-high: #16a34a;
+  --trust-mid:  #b45309;
+  --trust-low:  #dc2626;
+  --color-success: #16a34a;
+  --color-error:   #dc2626;
+  --color-warning: #b45309;
+  --color-info:    #2563eb;
+  --color-accent:  #7c3aed;
+  --shadow-sm: 0 1px 3px rgba(60,45,20,0.12), 0 1px 2px rgba(60,45,20,0.08);
+  --shadow-md: 0 4px 12px rgba(60,45,20,0.15), 0 2px 4px rgba(60,45,20,0.1);
+  --shadow-lg: 0 10px 30px rgba(60,45,20,0.2), 0 4px 8px rgba(60,45,20,0.1);
 }
 
 /* ── Snipe Mode easter egg theme ─────────────────── */

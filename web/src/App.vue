@@ -19,6 +19,7 @@ import { onMounted } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { useMotion } from './composables/useMotion'
 import { useSnipeMode } from './composables/useSnipeMode'
+import { useTheme } from './composables/useTheme'
 import { useKonamiCode } from './composables/useKonamiCode'
 import { useSessionStore } from './stores/session'
 import { useBlocklistStore } from './stores/blocklist'
@@ -28,6 +29,7 @@ import FeedbackButton from './components/FeedbackButton.vue'
 
 const motion = useMotion()
 const { activate, restore } = useSnipeMode()
+const { restore: restoreTheme } = useTheme()
 const session = useSessionStore()
 const blocklistStore = useBlocklistStore()
 const preferencesStore = usePreferencesStore()
@@ -37,6 +39,7 @@ useKonamiCode(activate)
 
 onMounted(async () => {
   restore()                           // re-apply snipe mode from localStorage on hard reload
+  restoreTheme()                      // re-apply explicit theme override on hard reload
   await session.bootstrap()           // fetch tier + feature flags from API
   blocklistStore.fetchBlocklist()     // pre-load so card block buttons reflect state immediately
   preferencesStore.load()             // load user preferences after session resolves
