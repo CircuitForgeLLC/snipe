@@ -312,6 +312,10 @@ export const useSearchStore = defineStore('search', () => {
     }
   }
 
+  function getListing(platformListingId: string): Listing | undefined {
+    return results.value.find(l => l.platform_listing_id === platformListingId)
+  }
+
   return {
     query,
     results,
@@ -330,5 +334,6 @@ export const useSearchStore = defineStore('search', () => {
     closeUpdates,
     clearResults,
     populateFromLLM,
+    getListing,
   }
 })

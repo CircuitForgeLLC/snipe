@@ -174,6 +174,12 @@
         <span v-if="marketPrice" class="card__market-price" title="Median market price">
           market ~{{ formattedMarket }}
         </span>
+        <RouterLink
+          :to="`/listing/${listing.platform_listing_id}`"
+          class="card__detail-link"
+          :aria-label="`View trust breakdown for: ${listing.title}`"
+          @click.stop
+        >Details</RouterLink>
       </div>
     </div>
   </article>
@@ -181,6 +187,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import type { Listing, TrustScore, Seller } from '../stores/search'
 import { useSearchStore } from '../stores/search'
 import { useBlocklistStore } from '../stores/blocklist'
@@ -732,6 +739,16 @@ const formattedMarket = computed(() => {
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
+
+.card__detail-link {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--app-primary);
+  text-decoration: none;
+  margin-top: var(--space-1);
+  transition: opacity 150ms ease;
+}
+.card__detail-link:hover { opacity: 0.75; }
 
 /* ── Triple Red easter egg ──────────────────────────────────────────────── */
 /* Fires when: (new_account | account_under_30d) + suspicious_price + hard flag */
