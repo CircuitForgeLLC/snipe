@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.db.models import Seller, TrustScore
@@ -60,9 +60,9 @@ def _days_since(iso: Optional[str]) -> Optional[int]:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
         # Normalize to naive UTC so both paths (timezone-aware ISO and SQLite
         # CURRENT_TIMESTAMP naive strings) compare correctly.
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return (datetime.utcnow() - dt).days
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).days
     except ValueError:
         return None
 

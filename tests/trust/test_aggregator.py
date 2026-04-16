@@ -1,5 +1,13 @@
+from datetime import datetime, timedelta, timezone
+
 from app.db.models import Seller
 from app.trust.aggregator import Aggregator
+
+_ALL_20 = {k: 20 for k in ["account_age", "feedback_count", "feedback_ratio", "price_vs_market", "category_history"]}
+
+
+def _iso_days_ago(n: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
 
 
 def test_composite_sum_of_five_signals():
@@ -132,3 +140,119 @@ def test_new_account_not_flagged_when_age_absent():
     result = agg.aggregate(scores, photo_hash_duplicate=False, seller=scraper_seller)
     assert "new_account" not in result.red_flags_json
     assert "account_under_30_days" not in result.red_flags_json
+
+
+# ── zero_feedback ─────────────────────────────────────────────────────────────
+
+def test_zero_feedback_adds_flag():
+    """seller.feedback_count == 0 must add zero_feedback flag."""
+    agg = Aggregator()
+    seller = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=365, feedback_count=0, feedback_ratio=1.0,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(_ALL_20.copy(), photo_hash_duplicate=False, seller=seller)
+    assert "zero_feedback" in result.red_flags_json
+
+
+def test_zero_feedback_caps_composite_at_35():
+    """Even with perfect other signals (all 20/20), zero feedback caps composite at 35."""
+    agg = Aggregator()
+    seller = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=365, feedback_count=0, feedback_ratio=1.0,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(_ALL_20.copy(), photo_hash_duplicate=False, seller=seller)
+    assert result.composite_score <= 35
+
+
+# ── long_on_market ────────────────────────────────────────────────────────────
+
+def test_long_on_market_flagged_when_thresholds_met():
+    """times_seen >= 5 AND listing age >= 14 days → long_on_market fires."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        times_seen=5, first_seen_at=_iso_days_ago(20),
+    )
+    assert "long_on_market" in result.red_flags_json
+
+
+def test_long_on_market_not_flagged_when_too_few_sightings():
+    """times_seen < 5 must NOT trigger long_on_market even if listing is old."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        times_seen=4, first_seen_at=_iso_days_ago(30),
+    )
+    assert "long_on_market" not in result.red_flags_json
+
+
+def test_long_on_market_not_flagged_when_too_recent():
+    """times_seen >= 5 but only seen for < 14 days → long_on_market must NOT fire."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        times_seen=10, first_seen_at=_iso_days_ago(5),
+    )
+    assert "long_on_market" not in result.red_flags_json
+
+
+# ── significant_price_drop ────────────────────────────────────────────────────
+
+def test_significant_price_drop_flagged():
+    """price >= 20% below price_at_first_seen → significant_price_drop fires."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        price=75.00, price_at_first_seen=100.00,  # 25% drop
+    )
+    assert "significant_price_drop" in result.red_flags_json
+
+
+def test_significant_price_drop_not_flagged_when_drop_is_small():
+    """< 20% drop must NOT trigger significant_price_drop."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        price=95.00, price_at_first_seen=100.00,  # 5% drop
+    )
+    assert "significant_price_drop" not in result.red_flags_json
+
+
+def test_significant_price_drop_not_flagged_when_no_prior_price():
+    """price_at_first_seen=None (first sighting) must NOT fire significant_price_drop."""
+    agg = Aggregator()
+    result = agg.aggregate(
+        _ALL_20.copy(), photo_hash_duplicate=False, seller=None,
+        price=50.00, price_at_first_seen=None,
+    )
+    assert "significant_price_drop" not in result.red_flags_json
+
+
+# ── established retailer ──────────────────────────────────────────────────────
+
+def test_established_retailer_suppresses_duplicate_photo():
+    """feedback_count >= 1000 (established retailer) must suppress duplicate_photo flag."""
+    agg = Aggregator()
+    retailer = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=1800, feedback_count=5000, feedback_ratio=0.99,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(_ALL_20.copy(), photo_hash_duplicate=True, seller=retailer)
+    assert "duplicate_photo" not in result.red_flags_json
+
+
+def test_non_retailer_does_not_suppress_duplicate_photo():
+    """feedback_count < 1000 — duplicate_photo must still fire when hash matches."""
+    agg = Aggregator()
+    seller = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=365, feedback_count=50, feedback_ratio=0.99,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(_ALL_20.copy(), photo_hash_duplicate=True, seller=seller)
+    assert "duplicate_photo" in result.red_flags_json
