@@ -11,6 +11,8 @@ export interface UserPreferences {
   }
 }
 
+const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
+
 export const usePreferencesStore = defineStore('preferences', () => {
   const session = useSessionStore()
   const prefs = ref<UserPreferences>({})
@@ -25,7 +27,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     loading.value = true
     error.value = null
     try {
-      const res = await fetch('/api/preferences')
+      const res = await fetch(`${apiBase}/api/preferences`)
       if (res.ok) {
         prefs.value = await res.json()
       }
@@ -40,7 +42,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     if (!session.isLoggedIn) return
     error.value = null
     try {
-      const res = await fetch('/api/preferences', {
+      const res = await fetch(`${apiBase}/api/preferences`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, value }),

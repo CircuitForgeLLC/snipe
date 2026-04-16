@@ -42,8 +42,9 @@ export const useSessionStore = defineStore('session', () => {
   const isLoggedIn = computed(() => isCloud.value && userId.value !== 'anonymous' && !isGuest.value)
 
   async function bootstrap() {
+    const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
     try {
-      const res = await fetch('/api/session')
+      const res = await fetch(`${apiBase}/api/session`)
       if (!res.ok) return  // local-mode with no session endpoint — keep defaults
       const data = await res.json()
       userId.value = data.user_id
