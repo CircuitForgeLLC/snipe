@@ -61,3 +61,6 @@ nav:
     - Trust Score Algorithm: reference/trust-scoring.md
     - Tier System: reference/tier-system.md
     - Architecture: reference/architecture.md
+
+extra_javascript:
+  - plausible.js
