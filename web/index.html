@@ -22,8 +22,9 @@
     <meta name="twitter:description" content="Free eBay trust scorer. Catches scammers before you bid. No account required." />
     <meta name="twitter:image" content="https://menagerie.circuitforge.tech/snipe/og-image.png" />
     <link rel="canonical" href="https://menagerie.circuitforge.tech/snipe" />
-    <!-- Inline background prevents blank flash before CSS bundle loads -->
-    <!-- Matches --color-surface dark tactical theme from theme.css -->
+    <!-- FOFT guard: prevents dark flash before CSS bundle loads.
+         theme.css overrides both html and body backgrounds via var(--color-surface)
+         once loaded, so this only applies for the brief pre-bundle window. -->
     <style>
       html, body { margin: 0; background: #0d1117; min-height: 100vh; }
     </style>

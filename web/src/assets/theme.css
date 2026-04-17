@@ -2,6 +2,12 @@
    Dark tactical theme: near-black surfaces, amber accent, trust-signal colours.
    ALL color/font/spacing tokens live here — nowhere else.
    Snipe Mode easter egg: activated by Konami code (cf-snipe-mode in localStorage).
+
+   Planned theme variants (add as [data-theme="<name>"] blocks using the same token set):
+     solarized-dark  — Ethan Schoonover's Solarized dark palette, amber accent
+     solarized-light — Solarized light palette, amber accent
+     high-contrast   — WCAG AAA minimum contrast ratios, no mid-grey text
+     colorblind      — Deuteranopia-safe trust signal colours (blue/orange instead of green/red)
 */
 
 /* ── Snipe — dark tactical (default) ───────────────
@@ -212,7 +218,7 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
-body { margin: 0; min-height: 100vh; }
+body { margin: 0; min-height: 100vh; background: var(--color-surface); }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-display);
