@@ -33,12 +33,31 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.db.store import Store
+from app.platforms.ebay.auth import EbayTokenManager
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _DB_PATH = Path(os.environ.get("SNIPE_DB", "data/snipe.db"))
+
+# ── App-level token manager ───────────────────────────────────────────────────
+# Lazily initialized from env vars; shared across all webhook requests.
+# The Notification public_key endpoint requires a Bearer app token.
+_app_token_manager: EbayTokenManager | None = None
+
+
+def _get_app_token() -> str | None:
+    """Return a valid eBay app-level Bearer token, or None if creds are absent."""
+    global _app_token_manager
+    client_id = (os.environ.get("EBAY_APP_ID") or os.environ.get("EBAY_CLIENT_ID", "")).strip()
+    client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
+    if not client_id or not client_secret:
+        return None
+    if _app_token_manager is None:
+        _app_token_manager = EbayTokenManager(client_id, client_secret)
+    return _app_token_manager.get_token()
+
 
 # ── Public-key cache ──────────────────────────────────────────────────────────
 # eBay key rotation is rare; 1-hour TTL is appropriate.
@@ -58,7 +77,14 @@ def _fetch_public_key(kid: str) -> bytes:
         return cached[0]
 
     key_url = _EBAY_KEY_URL.format(kid=kid)
-    resp = requests.get(key_url, timeout=10)
+    headers: dict[str, str] = {}
+    app_token = _get_app_token()
+    if app_token:
+        headers["Authorization"] = f"Bearer {app_token}"
+    else:
+        log.warning("public_key fetch: no app credentials — request will likely fail")
+
+    resp = requests.get(key_url, headers=headers, timeout=10)
     if not resp.ok:
         log.error("public key fetch failed: %s %s — body: %s", resp.status_code, key_url, resp.text[:500])
     resp.raise_for_status()
@@ -66,6 +92,42 @@ def _fetch_public_key(kid: str) -> bytes:
     pem_bytes = pem_str.encode()
     _key_cache[kid] = (pem_bytes, time.time() + _KEY_CACHE_TTL)
     return pem_bytes
+
+
+# ── GET — webhook health check ───────────────────────────────────────────────
+
+@router.get("/api/ebay/webhook-health")
+def ebay_webhook_health() -> dict:
+    """Lightweight health check for eBay webhook compliance monitoring.
+
+    Returns 200 + status dict when the webhook is fully configured.
+    Returns 500 when required env vars are missing.
+    Intended for Uptime Kuma or similar uptime monitors.
+    """
+    token = os.environ.get("EBAY_NOTIFICATION_TOKEN", "")
+    endpoint = os.environ.get("EBAY_NOTIFICATION_ENDPOINT", "")
+    client_id = (os.environ.get("EBAY_APP_ID") or os.environ.get("EBAY_CLIENT_ID", "")).strip()
+    client_secret = (os.environ.get("EBAY_CERT_ID") or os.environ.get("EBAY_CLIENT_SECRET", "")).strip()
+
+    missing = [
+        name for name, val in [
+            ("EBAY_NOTIFICATION_TOKEN", token),
+            ("EBAY_NOTIFICATION_ENDPOINT", endpoint),
+            ("EBAY_APP_ID / EBAY_CLIENT_ID", client_id),
+            ("EBAY_CERT_ID / EBAY_CLIENT_SECRET", client_secret),
+        ] if not val
+    ]
+    if missing:
+        log.error("ebay_webhook_health: missing config: %s", missing)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Webhook misconfigured — missing: {missing}",
+        )
+    return {
+        "status": "ok",
+        "endpoint": endpoint,
+        "signature_verification": os.environ.get("EBAY_WEBHOOK_VERIFY_SIGNATURES", "true"),
+    }
 
 
 # ── GET — challenge verification ──────────────────────────────────────────────
