@@ -291,7 +291,7 @@ class ScrapedEbayAdapter(PlatformAdapter):
         self._delay = delay
 
     def _fetch_url(self, url: str) -> str:
-        """Core Playwright fetch — stealthed headed Chromium via Xvfb.
+        """Core Playwright fetch — stealthed headed Chromium via pre-warmed browser pool.
 
         Shared by both search (_get) and BTF item-page enrichment (_fetch_item_html).
         Results cached for _HTML_CACHE_TTL seconds.
@@ -300,44 +300,8 @@ class ScrapedEbayAdapter(PlatformAdapter):
         if cached and time.time() < cached[1]:
             return cached[0]
 
-        time.sleep(self._delay)
-
-        import os
-        import subprocess
-        display_num = next(_display_counter)
-        display = f":{display_num}"
-        xvfb = subprocess.Popen(
-            ["Xvfb", display, "-screen", "0", "1280x800x24"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        env = os.environ.copy()
-        env["DISPLAY"] = display
-
-        try:
-            from playwright.sync_api import (
-                sync_playwright,  # noqa: PLC0415 — lazy: only needed in Docker
-            )
-            from playwright_stealth import Stealth  # noqa: PLC0415
-
-            with sync_playwright() as pw:
-                browser = pw.chromium.launch(
-                    headless=False,
-                    env=env,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
-                )
-                ctx = browser.new_context(
-                    user_agent=_HEADERS["User-Agent"],
-                    viewport={"width": 1280, "height": 800},
-                )
-                page = ctx.new_page()
-                Stealth().apply_stealth_sync(page)
-                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                page.wait_for_timeout(2000)  # let any JS challenges resolve
-                html = page.content()
-                browser.close()
-        finally:
-            xvfb.terminate()
-            xvfb.wait()
+        from app.platforms.ebay.browser_pool import get_pool  # noqa: PLC0415 — lazy import
+        html = get_pool().fetch_html(url, delay=self._delay)
 
         _html_cache[url] = (html, time.time() + _HTML_CACHE_TTL)
         return html
