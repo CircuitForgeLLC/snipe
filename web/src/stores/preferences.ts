@@ -12,7 +12,13 @@ export interface UserPreferences {
   community?: {
     blocklist_share?: boolean
   }
+  display?: {
+    currency?: string
+  }
 }
+
+const CURRENCY_LS_KEY = 'snipe:currency'
+const DEFAULT_CURRENCY = 'USD'
 
 const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
 
@@ -26,14 +32,34 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const affiliateByokId = computed(() => prefs.value.affiliate?.byok_ids?.ebay ?? '')
   const communityBlocklistShare = computed(() => prefs.value.community?.blocklist_share ?? false)
 
+  // displayCurrency: DB preference for logged-in users, localStorage for anon users
+  const displayCurrency = computed((): string => {
+    return prefs.value.display?.currency ?? DEFAULT_CURRENCY
+  })
+
   async function load() {
-    if (!session.isLoggedIn) return
+    if (!session.isLoggedIn) {
+      // Anonymous user: read currency from localStorage
+      const stored = localStorage.getItem(CURRENCY_LS_KEY)
+      if (stored) {
+        prefs.value = { ...prefs.value, display: { ...prefs.value.display, currency: stored } }
+      }
+      return
+    }
     loading.value = true
     error.value = null
     try {
       const res = await fetch(`${apiBase}/api/preferences`)
       if (res.ok) {
-        prefs.value = await res.json()
+        const data: UserPreferences = await res.json()
+        // Migration: if logged in but no DB preference, fall back to localStorage value
+        if (!data.display?.currency) {
+          const lsVal = localStorage.getItem(CURRENCY_LS_KEY)
+          if (lsVal) {
+            data.display = { ...data.display, currency: lsVal }
+          }
+        }
+        prefs.value = data
       }
     } catch {
       // Non-cloud deploy or network error — preferences unavailable
@@ -75,6 +101,18 @@ export const usePreferencesStore = defineStore('preferences', () => {
     await setPref('community.blocklist_share', value)
   }
 
+  async function setDisplayCurrency(code: string) {
+    const upper = code.toUpperCase()
+    // Optimistic local update so the UI reacts immediately
+    prefs.value = { ...prefs.value, display: { ...prefs.value.display, currency: upper } }
+    if (session.isLoggedIn) {
+      await setPref('display.currency', upper)
+    } else {
+      // Anonymous user: persist to localStorage only
+      localStorage.setItem(CURRENCY_LS_KEY, upper)
+    }
+  }
+
   return {
     prefs,
     loading,
@@ -82,9 +120,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
     affiliateOptOut,
     affiliateByokId,
     communityBlocklistShare,
+    displayCurrency,
     load,
     setAffiliateOptOut,
     setAffiliateByokId,
     setCommunityBlocklistShare,
+    setDisplayCurrency,
   }
 })
