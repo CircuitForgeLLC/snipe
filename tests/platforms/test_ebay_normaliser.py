@@ -1,5 +1,6 @@
 import pytest
 
+from api.main import _extract_ebay_item_id
 from app.platforms.ebay.normaliser import normalise_listing, normalise_seller
 
 
@@ -56,3 +57,48 @@ def test_normalise_seller_maps_fields():
     assert seller.feedback_count == 300
     assert seller.feedback_ratio == pytest.approx(0.991, abs=0.001)
     assert seller.account_age_days > 0
+
+
+# ── _extract_ebay_item_id ─────────────────────────────────────────────────────
+
+class TestExtractEbayItemId:
+    """Unit tests for the URL-to-item-ID normaliser."""
+
+    def test_itm_url_with_title_slug(self):
+        url = "https://www.ebay.com/itm/Sony-WH-1000XM5-Headphones/123456789012"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_itm_url_without_title_slug(self):
+        url = "https://www.ebay.com/itm/123456789012"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_itm_url_no_www(self):
+        url = "https://ebay.com/itm/123456789012"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_itm_url_with_query_params(self):
+        url = "https://www.ebay.com/itm/123456789012?hash=item1234abcd"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_pay_ebay_rxo_with_itemId_query_param(self):
+        url = "https://pay.ebay.com/rxo?action=view&sessionid=abc123&itemId=123456789012"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_pay_ebay_rxo_path_with_itemId(self):
+        url = "https://pay.ebay.com/rxo/view?itemId=123456789012"
+        assert _extract_ebay_item_id(url) == "123456789012"
+
+    def test_non_ebay_url_returns_none(self):
+        assert _extract_ebay_item_id("https://amazon.com/dp/B08N5WRWNW") is None
+
+    def test_plain_keyword_returns_none(self):
+        assert _extract_ebay_item_id("rtx 4090 gpu") is None
+
+    def test_empty_string_returns_none(self):
+        assert _extract_ebay_item_id("") is None
+
+    def test_ebay_url_no_item_id_returns_none(self):
+        assert _extract_ebay_item_id("https://www.ebay.com/sch/i.html?_nkw=gpu") is None
+
+    def test_pay_ebay_no_item_id_returns_none(self):
+        assert _extract_ebay_item_id("https://pay.ebay.com/rxo?action=view&sessionid=abc") is None

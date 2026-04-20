@@ -10,11 +10,13 @@ import json as _json
 import logging
 import os
 import queue as _queue
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from circuitforge_core.api import make_corrections_router as _make_corrections_router
@@ -208,6 +210,52 @@ async def _lifespan(app: FastAPI):
         except Exception:
             pass
         _community_store = None
+
+
+_EBAY_ITM_RE = re.compile(r"/itm/(?:[^/]+/)?(\d{8,13})(?:[/?#]|$)")
+_EBAY_ITEM_ID_DIGITS = re.compile(r"^\d{8,13}$")
+
+
+def _extract_ebay_item_id(q: str) -> str | None:
+    """Extract a numeric eBay item ID from a URL, or return None if *q* is not an eBay URL.
+
+    Supported formats:
+      - https://www.ebay.com/itm/Title-String/123456789012
+      - https://www.ebay.com/itm/123456789012
+      - https://ebay.com/itm/123456789012
+      - https://pay.ebay.com/rxo?action=view&sessionid=...&itemId=123456789012
+      - https://pay.ebay.com/rxo/view?itemId=123456789012
+    """
+    q = q.strip()
+    # Must look like a URL — require http/https scheme or an ebay.com hostname.
+    if not (q.startswith("http://") or q.startswith("https://")):
+        return None
+
+    try:
+        parsed = urlparse(q)
+    except Exception:
+        return None
+
+    host = parsed.hostname or ""
+    if not (host == "ebay.com" or host.endswith(".ebay.com")):
+        return None
+
+    # pay.ebay.com checkout URLs — item ID is in the itemId query param.
+    if host == "pay.ebay.com":
+        params = parse_qs(parsed.query)
+        item_id_list = params.get("itemId") or params.get("itemid")
+        if item_id_list:
+            candidate = item_id_list[0]
+            if _EBAY_ITEM_ID_DIGITS.match(candidate):
+                return candidate
+        return None
+
+    # Standard listing URLs — item ID appears after /itm/.
+    m = _EBAY_ITM_RE.search(parsed.path)
+    if m:
+        return m.group(1)
+
+    return None
 
 
 def _ebay_creds() -> tuple[str, str, str]:
@@ -587,6 +635,13 @@ def search(
     adapter: str = "auto",         # "auto" | "api" | "scraper" — override adapter selection
     session: CloudUser = Depends(get_session),
 ):
+    # If the user pasted an eBay listing or checkout URL, extract the item ID
+    # and use it as the search query so the exact item surfaces in results.
+    ebay_item_id = _extract_ebay_item_id(q)
+    if ebay_item_id:
+        log.info("search: eBay URL detected, extracted item_id=%s", ebay_item_id)
+        q = ebay_item_id
+
     if not q.strip():
         return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None, "adapter_used": _adapter_name(adapter)}
 
