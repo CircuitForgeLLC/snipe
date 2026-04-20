@@ -5,12 +5,14 @@ import asyncio
 import csv
 import dataclasses
 import hashlib
+import hashlib as _hashlib
 import io
 import json as _json
 import logging
 import os
 import queue as _queue
 import re
+import time as _time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -75,6 +77,61 @@ def _auth_label(user_id: str) -> str:
 _update_queues: dict[str, _queue.SimpleQueue] = {}
 
 
+# ── Short-TTL search result cache ────────────────────────────────────────────
+# Caches raw eBay listings and market_price only — trust scores are NOT cached
+# because they incorporate per-user signals (zero_feedback cap, etc.).
+# On cache hit the trust scorer and seller lookups run against the local DB as
+# normal; only the expensive Playwright/Browse API scrape is skipped.
+#
+# TTL is configurable via SEARCH_CACHE_TTL_S (default 300 s = 5 min).
+# Listings are public eBay data — safe to share across all users.
+
+_SEARCH_CACHE_TTL = int(os.environ.get("SEARCH_CACHE_TTL_S", "300"))
+
+# key → ({"listings": [...raw dicts...], "market_price": float|None}, expiry_ts)
+_search_result_cache: dict[str, tuple[dict, float]] = {}
+
+# Throttle eviction sweeps to at most once per 60 s.
+_last_eviction_ts: float = 0.0
+
+
+def _cache_key(
+    q: str,
+    max_price: "float | None",
+    min_price: "float | None",
+    pages: int,
+    must_include: str,
+    must_include_mode: str,
+    must_exclude: str,
+    category_id: str,
+) -> str:
+    """Stable 16-char hex key for a search param set.  Query is lower-cased + stripped."""
+    raw = (
+        f"{q.lower().strip()}|{max_price}|{min_price}|{pages}"
+        f"|{must_include.lower().strip()}|{must_include_mode}"
+        f"|{must_exclude.lower().strip()}|{category_id.strip()}"
+    )
+    return _hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _evict_expired_cache() -> None:
+    """Remove stale entries from _search_result_cache.
+
+    Called opportunistically on each cache miss; rate-limited to once per 60 s
+    to avoid quadratic overhead when many concurrent misses arrive at once.
+    """
+    global _last_eviction_ts
+    now = _time.time()
+    if now - _last_eviction_ts < 60.0:
+        return
+    _last_eviction_ts = now
+    expired = [k for k, (_, exp) in _search_result_cache.items() if exp <= now]
+    for k in expired:
+        _search_result_cache.pop(k, None)
+    if expired:
+        log.debug("cache: evicted %d expired entries", len(expired))
+
+
 # ── Community DB (optional — only active when COMMUNITY_DB_URL is set) ────────
 # Holds SnipeCommunityStore at module level so endpoints can publish signals
 # without constructing a new connection pool on every request.
@@ -97,6 +154,21 @@ def _get_query_translator():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _community_store
+    # Pre-warm the Chromium browser pool so the first scrape request does not
+    # pay the full cold-start cost (5-10s Xvfb + browser launch).
+    # Pool size is controlled via BROWSER_POOL_SIZE env var (default: 2).
+    import threading as _threading
+    from app.platforms.ebay.browser_pool import get_pool as _get_browser_pool
+    _browser_pool = _get_browser_pool()
+    _pool_thread = _threading.Thread(
+        target=_browser_pool.start, daemon=True, name="browser-pool-start"
+    )
+    _pool_thread.start()
+    log.info(
+        "BrowserPool: pre-warm started in background (BROWSER_POOL_SIZE=%s)",
+        os.environ.get("BROWSER_POOL_SIZE", "2"),
+    )
+
     # Start vision/LLM background task scheduler.
     # background_tasks queue lives in shared_db (cloud) or local_db (local)
     # so the scheduler has a single stable DB path across all cloud users.
@@ -204,6 +276,13 @@ async def _lifespan(app: FastAPI):
     get_scheduler(sched_db).shutdown(timeout=10.0)
     reset_scheduler()
     log.info("Snipe task scheduler stopped.")
+
+    # Drain and close all pre-warmed browser pool slots.
+    try:
+        _browser_pool.stop()
+    except Exception:
+        log.warning("BrowserPool: error during shutdown", exc_info=True)
+
     if _community_store is not None:
         try:
             _community_store._db.close()
@@ -633,6 +712,7 @@ def search(
     must_exclude: str = "",        # comma-separated; forwarded to eBay -term + client-side
     category_id: str = "",         # eBay category ID — forwarded to Browse API / scraper _sacat
     adapter: str = "auto",         # "auto" | "api" | "scraper" — override adapter selection
+    refresh: bool = False,         # when True, bypass cache read (still writes fresh result)
     session: CloudUser = Depends(get_session),
 ):
     # If the user pasted an eBay listing or checkout URL, extract the item ID
@@ -684,6 +764,117 @@ def search(
 
     shared_db = session.shared_db
     user_db = session.user_db
+
+    # ── Cache lookup (synchronous endpoint) ──────────────────────────────────
+    cache_key = _cache_key(q, max_price, min_price, pages, must_include, must_include_mode, must_exclude, category_id)
+
+    cached_listings_dicts: "list | None" = None
+    cached_market_price: "float | None" = None
+
+    if not refresh:
+        cached = _search_result_cache.get(cache_key)
+        if cached is not None:
+            payload, expiry = cached
+            if expiry > _time.time():
+                log.info("cache: hit key=%s q=%r", cache_key, q)
+                cached_listings_dicts = payload["listings"]
+                cached_market_price = payload["market_price"]
+
+    if cached_listings_dicts is not None:
+        # Cache hit path: reconstruct listings as plain dicts (already serialised),
+        # re-run trust scorer against the local DB so per-user signals are fresh,
+        # and kick off background enrichment as normal.
+        import sqlite3 as _sqlite3
+
+        affiliate_active = bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip())
+        session_id = str(uuid.uuid4())
+        _update_queues[session_id] = _queue.SimpleQueue()
+
+        try:
+            shared_store = Store(shared_db)
+            user_store = Store(user_db)
+
+            # Re-hydrate Listing dataclass instances from the cached dicts so the
+            # scorer and DB calls receive proper typed objects.
+            from app.db.models import Listing as _Listing
+            listings = [_Listing(**d) for d in cached_listings_dicts]
+
+            # Re-save to user_store so staging fields are current for this session.
+            user_store.save_listings(listings)
+            staged = user_store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
+            listings = [staged.get(l.platform_listing_id, l) for l in listings]
+
+            # Fresh trust scores against local DB (not cached — user-specific).
+            scorer = TrustScorer(shared_store)
+            trust_scores_list = scorer.score_batch(listings, q)
+            user_store.save_trust_scores(trust_scores_list)
+
+            features = compute_features(session.tier)
+            if features.photo_analysis:
+                _enqueue_vision_tasks(listings, trust_scores_list, session)
+
+            trust_map = {
+                listing.platform_listing_id: dataclasses.asdict(ts)
+                for listing, ts in zip(listings, trust_scores_list)
+                if ts is not None
+            }
+            seller_map = {
+                listing.seller_platform_id: dataclasses.asdict(
+                    shared_store.get_seller("ebay", listing.seller_platform_id)
+                )
+                for listing in listings
+                if listing.seller_platform_id
+                and shared_store.get_seller("ebay", listing.seller_platform_id)
+            }
+
+            _is_unauthed = session.user_id == "anonymous" or session.user_id.startswith("guest:")
+            _pref_store = None if _is_unauthed else user_store
+
+            def _get_pref_cached(uid: Optional[str], path: str, default=None):
+                return _pref_store.get_user_preference(path, default=default)  # type: ignore[union-attr]
+
+            def _serialize_listing_cached(l: object) -> dict:
+                d = dataclasses.asdict(l)
+                d["url"] = _wrap_affiliate_url(
+                    d["url"],
+                    retailer="ebay",
+                    user_id=None if _is_unauthed else session.user_id,
+                    get_preference=_get_pref_cached if _pref_store is not None else None,
+                )
+                return d
+
+            # Kick off BTF enrichment so live score updates still flow.
+            _trigger_scraper_enrichment(
+                listings, shared_store, shared_db,
+                user_db=user_db, query=comp_query, session_id=session_id,
+            )
+
+            return {
+                "listings": [_serialize_listing_cached(l) for l in listings],
+                "trust_scores": trust_map,
+                "sellers": seller_map,
+                "market_price": cached_market_price,
+                "adapter_used": adapter_used,
+                "affiliate_active": affiliate_active,
+                "session_id": session_id,
+            }
+
+        except _sqlite3.OperationalError as e:
+            log.warning("search (cache hit) DB contention: %s", e)
+            _update_queues.pop(session_id, None)
+            return {
+                "listings": cached_listings_dicts,
+                "trust_scores": {},
+                "sellers": {},
+                "market_price": cached_market_price,
+                "adapter_used": adapter_used,
+                "affiliate_active": affiliate_active,
+                "session_id": None,
+            }
+
+    # ── Cache miss — run full scrape ─────────────────────────────────────────
+    _evict_expired_cache()
+    log.info("cache: miss key=%s q=%r", cache_key, q)
 
     # Each thread creates its own Store — sqlite3 check_same_thread=True.
     def _run_search(ebay_query: str) -> list:
@@ -796,6 +987,14 @@ def search(
         comp = shared_store.get_market_comp("ebay", query_hash)
         market_price = comp.median_price if comp else None
 
+        # Store raw listings (as dicts) + market_price in cache.
+        # Trust scores and seller enrichment are intentionally excluded — they
+        # incorporate per-user signals and must be computed fresh each time.
+        _search_result_cache[cache_key] = (
+            {"listings": [dataclasses.asdict(l) for l in listings], "market_price": market_price},
+            _time.time() + _SEARCH_CACHE_TTL,
+        )
+
         # Serialize — keyed by platform_listing_id for easy Vue lookup
         trust_map = {
             listing.platform_listing_id: dataclasses.asdict(ts)
@@ -873,6 +1072,7 @@ def search_async(
     must_exclude: str = "",
     category_id: str = "",
     adapter: str = "auto",
+    refresh: bool = False,          # when True, bypass cache read (still writes fresh result)
     session: CloudUser = Depends(get_session),
 ):
     """Async variant of GET /api/search.
@@ -923,10 +1123,11 @@ def search_async(
     _tier = session.tier
     _user_id = session.user_id
     _affiliate_active = bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip())
+    _refresh = refresh  # capture before the closure is dispatched
 
     def _background_search() -> None:
         """Run the full search pipeline and push SSE events to the queue."""
-        import hashlib as _hashlib
+        import hashlib as _hashlib_local
         import sqlite3 as _sqlite3
 
         q_norm = q  # captured from outer scope
@@ -964,6 +1165,100 @@ def search_async(
             sq = _update_queues.get(session_id)
             if sq is not None:
                 sq.put(event)
+
+        # ── Cache lookup (async background worker) ────────────────────────────
+        async_cache_key = _cache_key(
+            q_norm, max_price, min_price, pages,
+            must_include, must_include_mode, must_exclude, category_id,
+        )
+
+        if not _refresh:
+            cached = _search_result_cache.get(async_cache_key)
+            if cached is not None:
+                payload, expiry = cached
+                if expiry > _time.time():
+                    log.info("cache: hit key=%s q=%r", async_cache_key, q_norm)
+                    from app.db.models import Listing as _Listing
+                    cached_listings_raw = payload["listings"]
+                    cached_market_price = payload["market_price"]
+                    try:
+                        shared_store = Store(_shared_db)
+                        user_store = Store(_user_db)
+                        listings = [_Listing(**d) for d in cached_listings_raw]
+                        user_store.save_listings(listings)
+                        staged = user_store.get_listings_staged(
+                            "ebay", [l.platform_listing_id for l in listings]
+                        )
+                        listings = [staged.get(l.platform_listing_id, l) for l in listings]
+
+                        scorer = TrustScorer(shared_store)
+                        trust_scores_list = scorer.score_batch(listings, q_norm)
+                        user_store.save_trust_scores(trust_scores_list)
+
+                        features_obj = compute_features(_tier)
+                        if features_obj.photo_analysis:
+                            from api.cloud_session import CloudUser as _CloudUser
+                            _sess_stub = _CloudUser(
+                                user_id=_user_id, tier=_tier,
+                                shared_db=_shared_db, user_db=_user_db,
+                            )
+                            _enqueue_vision_tasks(listings, trust_scores_list, _sess_stub)
+
+                        trust_map = {
+                            listing.platform_listing_id: dataclasses.asdict(ts)
+                            for listing, ts in zip(listings, trust_scores_list)
+                            if ts is not None
+                        }
+                        seller_map = {
+                            listing.seller_platform_id: dataclasses.asdict(
+                                shared_store.get_seller("ebay", listing.seller_platform_id)
+                            )
+                            for listing in listings
+                            if listing.seller_platform_id
+                            and shared_store.get_seller("ebay", listing.seller_platform_id)
+                        }
+
+                        _is_unauthed = _user_id == "anonymous" or _user_id.startswith("guest:")
+                        _pref_store_hit = None if _is_unauthed else user_store
+
+                        def _get_pref_hit(uid: Optional[str], path: str, default=None):
+                            return _pref_store_hit.get_user_preference(path, default=default)  # type: ignore[union-attr]
+
+                        def _serialize_hit(l: object) -> dict:
+                            d = dataclasses.asdict(l)
+                            d["url"] = _wrap_affiliate_url(
+                                d["url"],
+                                retailer="ebay",
+                                user_id=None if _is_unauthed else _user_id,
+                                get_preference=_get_pref_hit if _pref_store_hit is not None else None,
+                            )
+                            return d
+
+                        _push({
+                            "type": "listings",
+                            "listings": [_serialize_hit(l) for l in listings],
+                            "trust_scores": trust_map,
+                            "sellers": seller_map,
+                            "market_price": cached_market_price,
+                            "adapter_used": adapter_used,
+                            "affiliate_active": _affiliate_active,
+                            "session_id": session_id,
+                        })
+                        # Enrichment still runs so live score updates flow.
+                        _trigger_scraper_enrichment(
+                            listings, shared_store, _shared_db,
+                            user_db=_user_db, query=comp_query, session_id=session_id,
+                        )
+                        return  # done — no scraping needed
+                    except Exception as exc:
+                        log.warning(
+                            "cache hit path failed, falling through to scrape: %s", exc
+                        )
+                        # Fall through to full scrape below.
+
+        # ── Cache miss — evict stale entries, then scrape ─────────────────────
+        _evict_expired_cache()
+        log.info("cache: miss key=%s q=%r", async_cache_key, q_norm)
 
         try:
             def _run_search(ebay_query: str) -> list:
@@ -1038,9 +1333,15 @@ def search_async(
             if features_obj.photo_analysis:
                 _enqueue_vision_tasks(listings, trust_scores_list, _session_stub)
 
-            query_hash = _hashlib.md5(comp_query.encode()).hexdigest()
+            query_hash = _hashlib_local.md5(comp_query.encode()).hexdigest()
             comp = shared_store.get_market_comp("ebay", query_hash)
             market_price = comp.median_price if comp else None
+
+            # Store raw listings + market_price in cache (trust scores excluded).
+            _search_result_cache[async_cache_key] = (
+                {"listings": [dataclasses.asdict(l) for l in listings], "market_price": market_price},
+                _time.time() + _SEARCH_CACHE_TTL,
+            )
 
             trust_map = {
                 listing.platform_listing_id: dataclasses.asdict(ts)
