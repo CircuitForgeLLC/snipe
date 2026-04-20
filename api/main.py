@@ -855,6 +855,267 @@ def search(
         }
 
 
+# ── Async search (fire-and-forget + SSE streaming) ───────────────────────────
+
+# Module-level executor shared across all async search requests.
+# max_workers=4 caps concurrent Playwright/scraper sessions to avoid OOM.
+_search_executor = ThreadPoolExecutor(max_workers=4)
+
+
+@app.get("/api/search/async", status_code=202)
+def search_async(
+    q: str = "",
+    max_price: Optional[float] = None,
+    min_price: Optional[float] = None,
+    pages: int = 1,
+    must_include: str = "",
+    must_include_mode: str = "all",
+    must_exclude: str = "",
+    category_id: str = "",
+    adapter: str = "auto",
+    session: CloudUser = Depends(get_session),
+):
+    """Async variant of GET /api/search.
+
+    Returns HTTP 202 immediately with a session_id, then streams scrape results
+    and trust scores via GET /api/updates/{session_id} as they become available.
+
+    SSE event types pushed to the queue:
+      {"type": "listings", "listings": [...], "trust_scores": {...}, "sellers": {...},
+       "market_price": ..., "adapter_used": ..., "affiliate_active": ...}
+      {"type": "market_price", "market_price": 123.45}   (if comp resolves after listings)
+      {"type": "update", "platform_listing_id": "...", "trust_score": {...},
+       "seller": {...}, "market_price": ...}              (enrichment updates)
+      None                                               (sentinel — stream finished)
+    """
+    # Validate / normalise params — same logic as synchronous endpoint.
+    ebay_item_id = _extract_ebay_item_id(q)
+    if ebay_item_id:
+        q = ebay_item_id
+
+    if not q.strip():
+        # Return a completed (empty) session so the client can open the SSE
+        # stream and immediately receive a done event.
+        empty_id = str(uuid.uuid4())
+        _update_queues[empty_id] = _queue.SimpleQueue()
+        _update_queues[empty_id].put({
+            "type": "listings",
+            "listings": [],
+            "trust_scores": {},
+            "sellers": {},
+            "market_price": None,
+            "adapter_used": _adapter_name(adapter),
+            "affiliate_active": bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()),
+        })
+        _update_queues[empty_id].put(None)
+        return {"session_id": empty_id, "status": "queued"}
+
+    features = compute_features(session.tier)
+    pages = min(max(1, pages), features.max_pages)
+
+    session_id = str(uuid.uuid4())
+    _update_queues[session_id] = _queue.SimpleQueue()
+
+    # Capture everything the background worker needs — don't pass session object
+    # (it may not be safe to use across threads).
+    _shared_db = session.shared_db
+    _user_db = session.user_db
+    _tier = session.tier
+    _user_id = session.user_id
+    _affiliate_active = bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip())
+
+    def _background_search() -> None:
+        """Run the full search pipeline and push SSE events to the queue."""
+        import hashlib as _hashlib
+        import sqlite3 as _sqlite3
+
+        q_norm = q  # captured from outer scope
+        must_exclude_terms = _parse_terms(must_exclude)
+
+        if must_include_mode == "groups" and must_include.strip():
+            or_groups = parse_groups(must_include)
+            ebay_queries = expand_queries(q_norm, or_groups)
+        else:
+            ebay_queries = [q_norm]
+
+        if must_include_mode == "groups" and len(ebay_queries) > 0:
+            comp_query = ebay_queries[0]
+        elif must_include_mode == "all" and must_include.strip():
+            extra = " ".join(_parse_terms(must_include))
+            comp_query = f"{q_norm} {extra}".strip()
+        else:
+            comp_query = q_norm
+
+        base_filters = SearchFilters(
+            max_price=max_price if max_price and max_price > 0 else None,
+            min_price=min_price if min_price and min_price > 0 else None,
+            pages=pages,
+            must_exclude=must_exclude_terms,
+            category_id=category_id.strip() or None,
+        )
+
+        adapter_used = _adapter_name(adapter)
+        q_ref = _update_queues.get(session_id)
+        if q_ref is None:
+            return  # client disconnected before we even started
+
+        def _push(event: dict | None) -> None:
+            """Push an event to the queue; silently drop if session no longer exists."""
+            sq = _update_queues.get(session_id)
+            if sq is not None:
+                sq.put(event)
+
+        try:
+            def _run_search(ebay_query: str) -> list:
+                return _make_adapter(Store(_shared_db), adapter).search(ebay_query, base_filters)
+
+            def _run_comps() -> None:
+                try:
+                    _make_adapter(Store(_shared_db), adapter).get_completed_sales(comp_query, pages)
+                except Exception:
+                    log.warning("async comps: unhandled exception for %r", comp_query, exc_info=True)
+
+            max_workers_inner = min(len(ebay_queries) + 1, 5)
+            with ThreadPoolExecutor(max_workers=max_workers_inner) as ex:
+                comps_future = ex.submit(_run_comps)
+                search_futures = [ex.submit(_run_search, eq) for eq in ebay_queries]
+
+                seen_ids: set[str] = set()
+                listings: list = []
+                for fut in search_futures:
+                    for listing in fut.result():
+                        if listing.platform_listing_id not in seen_ids:
+                            seen_ids.add(listing.platform_listing_id)
+                            listings.append(listing)
+                comps_future.result()
+
+            log.info(
+                "async_search auth=%s tier=%s adapter=%s pages=%d listings=%d q=%r",
+                _auth_label(_user_id), _tier, adapter_used, pages, len(listings), q_norm,
+            )
+
+            shared_store = Store(_shared_db)
+            user_store = Store(_user_db)
+
+            user_store.save_listings(listings)
+
+            seller_ids = list({l.seller_platform_id for l in listings if l.seller_platform_id})
+            n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
+            if n_cat:
+                log.info("async_search: category history derived for %d sellers", n_cat)
+
+            staged = user_store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
+            listings = [staged.get(l.platform_listing_id, l) for l in listings]
+
+            _main_adapter = _make_adapter(shared_store, adapter)
+            sellers_needing_age = [
+                l.seller_platform_id for l in listings
+                if l.seller_platform_id
+                and shared_store.get_seller("ebay", l.seller_platform_id) is not None
+                and shared_store.get_seller("ebay", l.seller_platform_id).account_age_days is None
+            ]
+            seen_set: set[str] = set()
+            sellers_needing_age = [s for s in sellers_needing_age if not (s in seen_set or seen_set.add(s))]  # type: ignore[func-returns-value]
+
+            # Use a temporary CloudUser-like object for Trading API enrichment
+            from api.cloud_session import CloudUser as _CloudUser
+            _session_stub = _CloudUser(
+                user_id=_user_id,
+                tier=_tier,
+                shared_db=_shared_db,
+                user_db=_user_db,
+            )
+            trading_api_enriched = _try_trading_api_enrichment(
+                _main_adapter, sellers_needing_age, _user_db
+            )
+
+            scorer = TrustScorer(shared_store)
+            trust_scores_list = scorer.score_batch(listings, q_norm)
+            user_store.save_trust_scores(trust_scores_list)
+
+            # Enqueue vision tasks for paid+ tiers
+            features_obj = compute_features(_tier)
+            if features_obj.photo_analysis:
+                _enqueue_vision_tasks(listings, trust_scores_list, _session_stub)
+
+            query_hash = _hashlib.md5(comp_query.encode()).hexdigest()
+            comp = shared_store.get_market_comp("ebay", query_hash)
+            market_price = comp.median_price if comp else None
+
+            trust_map = {
+                listing.platform_listing_id: dataclasses.asdict(ts)
+                for listing, ts in zip(listings, trust_scores_list)
+                if ts is not None
+            }
+            seller_map = {
+                listing.seller_platform_id: dataclasses.asdict(
+                    shared_store.get_seller("ebay", listing.seller_platform_id)
+                )
+                for listing in listings
+                if listing.seller_platform_id
+                and shared_store.get_seller("ebay", listing.seller_platform_id)
+            }
+
+            _is_unauthed = _user_id == "anonymous" or _user_id.startswith("guest:")
+            _pref_store = None if _is_unauthed else user_store
+
+            def _get_pref(uid: Optional[str], path: str, default=None):
+                return _pref_store.get_user_preference(path, default=default)  # type: ignore[union-attr]
+
+            def _serialize_listing(l: object) -> dict:
+                d = dataclasses.asdict(l)
+                d["url"] = _wrap_affiliate_url(
+                    d["url"],
+                    retailer="ebay",
+                    user_id=None if _is_unauthed else _user_id,
+                    get_preference=_get_pref if _pref_store is not None else None,
+                )
+                return d
+
+            # Push the initial listings batch
+            _push({
+                "type": "listings",
+                "listings": [_serialize_listing(l) for l in listings],
+                "trust_scores": trust_map,
+                "sellers": seller_map,
+                "market_price": market_price,
+                "adapter_used": adapter_used,
+                "affiliate_active": _affiliate_active,
+                "session_id": session_id,
+            })
+
+            # Kick off background enrichment — it pushes "update" events and the sentinel.
+            _trigger_scraper_enrichment(
+                listings, shared_store, _shared_db,
+                user_db=_user_db, query=comp_query, session_id=session_id,
+                skip_seller_ids=trading_api_enriched,
+            )
+
+        except _sqlite3.OperationalError as e:
+            log.warning("async_search DB contention: %s", e)
+            _push({
+                "type": "listings",
+                "listings": [],
+                "trust_scores": {},
+                "sellers": {},
+                "market_price": None,
+                "adapter_used": adapter_used,
+                "affiliate_active": _affiliate_active,
+                "session_id": session_id,
+            })
+            _push(None)
+        except Exception as e:
+            log.warning("async_search background scrape failed: %s", e)
+            _push({
+                "type": "error",
+                "message": str(e),
+            })
+            _push(None)
+
+    _search_executor.submit(_background_search)
+    return {"session_id": session_id, "status": "queued"}
+
+
 # ── On-demand enrichment ──────────────────────────────────────────────────────
 
 @app.post("/api/enrich")
@@ -955,21 +1216,33 @@ def enrich_seller(
 async def stream_updates(session_id: str, request: Request):
     """Server-Sent Events stream for live trust score updates.
 
-    Opens after a search when any listings have score_is_partial=true.
-    Streams re-scored trust score payloads as enrichment completes, then
-    sends a 'done' event and closes.
+    Used both by the synchronous search endpoint (enrichment-only updates) and
+    the async search endpoint (initial listings + enrichment updates).
 
-    Each event payload:
+    Event data formats:
+      Enrichment update (legacy / sync search):
         { platform_listing_id, trust_score, seller, market_price }
+      Async search — initial batch:
+        { type: "listings", listings, trust_scores, sellers, market_price,
+          adapter_used, affiliate_active, session_id }
+      Async search — market price resolved after listings:
+        { type: "market_price", market_price }
+      Async search — per-seller enrichment update:
+        { type: "update", platform_listing_id, trust_score, seller, market_price }
+      Error:
+        { type: "error", message }
 
-    Closes automatically after 90 seconds (worst-case Playwright enrichment).
-    The client should also close on 'done' event.
+    All events are serialised as plain `data:` lines (no named event type).
+    The stream ends with a named `event: done` line.
+
+    Closes automatically after 150 seconds (covers worst-case async scrape + enrichment).
+    The client should also close on the 'done' event.
     """
     if session_id not in _update_queues:
         raise HTTPException(status_code=404, detail="Unknown session_id")
 
     q = _update_queues[session_id]
-    deadline = asyncio.get_event_loop().time() + 90.0
+    deadline = asyncio.get_event_loop().time() + 150.0
     heartbeat_interval = 15.0
     next_heartbeat = asyncio.get_event_loop().time() + heartbeat_interval
 
@@ -1335,6 +1608,11 @@ def get_preferences(session: CloudUser = Depends(get_session)) -> dict:
     return store.get_all_preferences()
 
 
+_SUPPORTED_CURRENCIES = frozenset({
+    "USD", "GBP", "EUR", "CAD", "AUD", "JPY", "CHF", "MXN", "BRL", "INR",
+})
+
+
 @app.patch("/api/preferences")
 def patch_preference(
     body: PreferenceUpdate,
@@ -1344,6 +1622,7 @@ def patch_preference(
 
     - ``affiliate.opt_out`` — available to all signed-in users.
     - ``affiliate.byok_ids.ebay`` — Premium tier only.
+    - ``display.currency`` — ISO 4217 code from the supported set.
 
     Returns the full updated preferences dict.
     """
@@ -1357,6 +1636,15 @@ def patch_preference(
             status_code=403,
             detail="Custom affiliate IDs (BYOK) require a Premium subscription.",
         )
+    if body.path == "display.currency":
+        code = str(body.value or "").strip().upper()
+        if code not in _SUPPORTED_CURRENCIES:
+            supported = ", ".join(sorted(_SUPPORTED_CURRENCIES))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported currency code '{body.value}'. Supported codes: {supported}",
+            )
+        body = PreferenceUpdate(path=body.path, value=code)
     store = Store(session.user_db)
     store.set_user_preference(body.path, body.value)
     return store.get_all_preferences()

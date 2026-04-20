@@ -145,6 +145,7 @@ export const useSearchStore = defineStore('search', () => {
     _abort?.abort()
     _abort = null
     loading.value = false
+    closeUpdates()
   }
 
   async function search(q: string, filters: SearchFilters = {}) {
@@ -158,8 +159,6 @@ export const useSearchStore = defineStore('search', () => {
     error.value = null
 
     try {
-      // TODO: POST /api/search with { query: q, filters }
-      // API does not exist yet — stub returns empty results
       // VITE_API_BASE is '' in dev; '/snipe' under menagerie (baked at build time by Vite)
       const apiBase = (import.meta.env.VITE_API_BASE as string) ?? ''
       const params = new URLSearchParams({ q })
@@ -174,51 +173,36 @@ export const useSearchStore = defineStore('search', () => {
       if (filters.mustExclude?.trim()) params.set('must_exclude', filters.mustExclude.trim())
       if (filters.categoryId?.trim()) params.set('category_id', filters.categoryId.trim())
       if (filters.adapter && filters.adapter !== 'auto') params.set('adapter', filters.adapter)
-      const res = await fetch(`${apiBase}/api/search?${params}`, { signal })
+
+      // Use the async endpoint: returns 202 immediately with a session_id, then
+      // streams listings + trust scores via SSE as the scrape completes.
+      const res = await fetch(`${apiBase}/api/search/async?${params}`, { signal })
       if (!res.ok) throw new Error(`Search failed: ${res.status} ${res.statusText}`)
 
       const data = await res.json() as {
-        listings: Listing[]
-        trust_scores: Record<string, TrustScore>
-        sellers: Record<string, Seller>
-        market_price: number | null
-        adapter_used: 'api' | 'scraper'
-        affiliate_active: boolean
-        session_id: string | null
+        session_id: string
+        status: 'queued'
       }
 
-      results.value = data.listings ?? []
-      trustScores.value = new Map(Object.entries(data.trust_scores ?? {}))
-      sellers.value = new Map(Object.entries(data.sellers ?? {}))
-      marketPrice.value = data.market_price ?? null
-      adapterUsed.value = data.adapter_used ?? null
-      affiliateActive.value = data.affiliate_active ?? false
-      saveCache({
-        query: q,
-        results: results.value,
-        trustScores: data.trust_scores ?? {},
-        sellers: data.sellers ?? {},
-        marketPrice: marketPrice.value,
-        adapterUsed: adapterUsed.value,
-      })
-
-      // Open SSE stream if any scores are partial and a session_id was provided
-      const hasPartial = Object.values(data.trust_scores ?? {}).some(ts => ts.score_is_partial)
-      if (data.session_id && hasPartial) {
-        _openUpdates(data.session_id, apiBase)
-      }
+      // HTTP 202 received — scraping is underway in the background.
+      // Stay in loading state until the first "listings" SSE event arrives.
+      // loading.value stays true; enriching tracks the SSE stream being open.
+      enriching.value = true
+      _openUpdates(data.session_id, apiBase)
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         // User cancelled — clear loading but don't surface as an error
         results.value = []
+        loading.value = false
       } else {
         error.value = e instanceof Error ? e.message : 'Unknown error'
         results.value = []
+        loading.value = false
       }
-    } finally {
-      loading.value = false
       _abort = null
     }
+    // Note: loading.value is NOT set to false here — it stays true until the
+    // first "listings" SSE event arrives (see _openUpdates handler below).
   }
 
   function closeUpdates() {
@@ -229,34 +213,115 @@ export const useSearchStore = defineStore('search', () => {
     enriching.value = false
   }
 
+  // Internal type for typed SSE events from the async search endpoint
+  type _AsyncListingsEvent = {
+    type: 'listings'
+    listings: Listing[]
+    trust_scores: Record<string, TrustScore>
+    sellers: Record<string, Seller>
+    market_price: number | null
+    adapter_used: 'api' | 'scraper'
+    affiliate_active: boolean
+    session_id: string
+  }
+
+  type _MarketPriceEvent = {
+    type: 'market_price'
+    market_price: number | null
+  }
+
+  type _UpdateEvent = {
+    type: 'update'
+    platform_listing_id: string
+    trust_score: TrustScore
+    seller: Seller
+    market_price: number | null
+  }
+
+  type _LegacyUpdateEvent = {
+    platform_listing_id: string
+    trust_score: TrustScore
+    seller: Record<string, unknown>
+    market_price: number | null
+  }
+
+  type _SSEEvent =
+    | _AsyncListingsEvent
+    | _MarketPriceEvent
+    | _UpdateEvent
+    | _LegacyUpdateEvent
+
   function _openUpdates(sessionId: string, apiBase: string) {
-    closeUpdates()  // close any previous stream
-    enriching.value = true
+    // Close any pre-existing stream but preserve enriching state — caller sets it.
+    if (_sse) {
+      _sse.close()
+      _sse = null
+    }
 
     const es = new EventSource(`${apiBase}/api/updates/${sessionId}`)
     _sse = es
 
     es.onmessage = (e) => {
       try {
-        const update = JSON.parse(e.data) as {
-          platform_listing_id: string
-          trust_score: TrustScore
-          seller: Record<string, unknown>
-          market_price: number | null
-        }
-        if (update.platform_listing_id && update.trust_score) {
-          trustScores.value = new Map(trustScores.value)
-          trustScores.value.set(update.platform_listing_id, update.trust_score)
-        }
-        if (update.seller) {
-          const s = update.seller as Seller
-          if (s.platform_seller_id) {
-            sellers.value = new Map(sellers.value)
-            sellers.value.set(s.platform_seller_id, s)
+        const update = JSON.parse(e.data) as _SSEEvent
+
+        if ('type' in update) {
+          // Typed events from the async search endpoint
+          if (update.type === 'listings') {
+            // First batch: hydrate store and transition out of loading state
+            results.value = update.listings ?? []
+            trustScores.value = new Map(Object.entries(update.trust_scores ?? {}))
+            sellers.value = new Map(Object.entries(update.sellers ?? {}))
+            marketPrice.value = update.market_price ?? null
+            adapterUsed.value = update.adapter_used ?? null
+            affiliateActive.value = update.affiliate_active ?? false
+            saveCache({
+              query: query.value,
+              results: results.value,
+              trustScores: update.trust_scores ?? {},
+              sellers: update.sellers ?? {},
+              marketPrice: marketPrice.value,
+              adapterUsed: adapterUsed.value,
+            })
+            // Scrape complete — turn off the initial loading spinner.
+            // enriching stays true while enrichment SSE is still open.
+            loading.value = false
+          } else if (update.type === 'market_price') {
+            if (update.market_price != null) {
+              marketPrice.value = update.market_price
+            }
+          } else if (update.type === 'update') {
+            // Per-seller enrichment update (same as legacy format but typed)
+            if (update.platform_listing_id && update.trust_score) {
+              trustScores.value = new Map(trustScores.value)
+              trustScores.value.set(update.platform_listing_id, update.trust_score)
+            }
+            if (update.seller?.platform_seller_id) {
+              sellers.value = new Map(sellers.value)
+              sellers.value.set(update.seller.platform_seller_id, update.seller)
+            }
+            if (update.market_price != null) {
+              marketPrice.value = update.market_price
+            }
           }
-        }
-        if (update.market_price != null) {
-          marketPrice.value = update.market_price
+          // type: "error" — no special handling; stream will close via 'done'
+        } else {
+          // Legacy enrichment update (no type field) from synchronous search path
+          const legacy = update as _LegacyUpdateEvent
+          if (legacy.platform_listing_id && legacy.trust_score) {
+            trustScores.value = new Map(trustScores.value)
+            trustScores.value.set(legacy.platform_listing_id, legacy.trust_score)
+          }
+          if (legacy.seller) {
+            const s = legacy.seller as Seller
+            if (s.platform_seller_id) {
+              sellers.value = new Map(sellers.value)
+              sellers.value.set(s.platform_seller_id, s)
+            }
+          }
+          if (legacy.market_price != null) {
+            marketPrice.value = legacy.market_price
+          }
         }
       } catch {
         // malformed event — ignore
@@ -268,6 +333,8 @@ export const useSearchStore = defineStore('search', () => {
     })
 
     es.onerror = () => {
+      // If loading is still true (never got a "listings" event), clear it
+      loading.value = false
       closeUpdates()
     }
   }
