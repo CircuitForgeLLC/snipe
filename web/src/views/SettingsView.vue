@@ -69,6 +69,28 @@
           >{{ opt.label }}</button>
         </div>
       </div>
+
+      <!-- Display currency -->
+      <div class="settings-toggle">
+        <div class="settings-toggle-text">
+          <span class="settings-toggle-label">Display currency</span>
+          <span class="settings-toggle-desc">
+            Listing prices are converted from USD using live exchange rates.
+            Rates update hourly.
+          </span>
+        </div>
+        <select
+          id="display-currency"
+          class="settings-select"
+          :value="prefs.displayCurrency"
+          aria-label="Select display currency"
+          @change="prefs.setDisplayCurrency(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="opt in currencyOptions" :key="opt.code" :value="opt.code">
+            {{ opt.code }} — {{ opt.label }}
+          </option>
+        </select>
+      </div>
     </section>
 
     <!-- Affiliate Links — only shown to signed-in cloud users -->
@@ -165,6 +187,18 @@ const themeOptions: { value: 'system' | 'dark' | 'light'; label: string }[] = [
   { value: 'system', label: 'System' },
   { value: 'dark',   label: 'Dark' },
   { value: 'light',  label: 'Light' },
+]
+const currencyOptions: { code: string; label: string }[] = [
+  { code: 'USD', label: 'US Dollar' },
+  { code: 'EUR', label: 'Euro' },
+  { code: 'GBP', label: 'British Pound' },
+  { code: 'CAD', label: 'Canadian Dollar' },
+  { code: 'AUD', label: 'Australian Dollar' },
+  { code: 'JPY', label: 'Japanese Yen' },
+  { code: 'CHF', label: 'Swiss Franc' },
+  { code: 'MXN', label: 'Mexican Peso' },
+  { code: 'BRL', label: 'Brazilian Real' },
+  { code: 'INR', label: 'Indian Rupee' },
 ]
 const session = useSessionStore()
 const prefs = usePreferencesStore()
@@ -344,6 +378,24 @@ function saveByokId() {
   font-size: 0.8125rem;
   color: var(--color-danger, #f85149);
   margin: 0;
+}
+
+.settings-select {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+
+.settings-select:focus {
+  border-color: var(--app-primary);
 }
 
 .theme-btn-group {

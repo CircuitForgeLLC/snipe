@@ -189,15 +189,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { Listing, TrustScore, Seller } from '../stores/search'
 import { useSearchStore } from '../stores/search'
 import { useBlocklistStore } from '../stores/blocklist'
 import TrustFeedbackButtons from './TrustFeedbackButtons.vue'
 import { useTrustSignalPref } from '../composables/useTrustSignalPref'
+import { formatPrice, formatPriceUSD } from '../composables/useCurrency'
+import { usePreferencesStore } from '../stores/preferences'
 
 const { enabled: trustSignalEnabled } = useTrustSignalPref()
+const prefsStore = usePreferencesStore()
 
 const props = defineProps<{
   listing: Listing
@@ -379,15 +382,26 @@ const isSteal = computed(() => {
   return props.listing.price < props.marketPrice * 0.8
 })
 
-const formattedPrice = computed(() => {
-  const sym = props.listing.currency === 'USD' ? '$' : props.listing.currency + ' '
-  return `${sym}${props.listing.price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
-})
+// Async price display — show USD synchronously while rates load, then update
+const formattedPrice = ref(formatPriceUSD(props.listing.price))
+const formattedMarket = ref(props.marketPrice ? formatPriceUSD(props.marketPrice) : '')
 
-const formattedMarket = computed(() => {
-  if (!props.marketPrice) return ''
-  return `$${props.marketPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-})
+async function _updatePrices() {
+  const currency = prefsStore.displayCurrency
+  formattedPrice.value = await formatPrice(props.listing.price, currency)
+  if (props.marketPrice) {
+    formattedMarket.value = await formatPrice(props.marketPrice, currency)
+  } else {
+    formattedMarket.value = ''
+  }
+}
+
+// Update when the listing, marketPrice, or display currency changes
+watch(
+  [() => props.listing.price, () => props.marketPrice, () => prefsStore.displayCurrency],
+  () => { _updatePrices() },
+  { immediate: true },
+)
 </script>
 
 <style scoped>
