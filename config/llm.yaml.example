@@ -39,6 +39,21 @@ backends:
     #   service: ollama
     #   ttl_s: 300
 
+  # ── cf-orch trunk services ─────────────────────────────────────────────────
+  # Allocate via cf-orch; the router calls the allocated service directly.
+  # Set CF_ORCH_URL (env) or url below to activate.
+  cf_text:
+    type: openai_compat
+    enabled: false
+    base_url: http://localhost:8008/v1
+    model: __auto__
+    api_key: any
+    supports_images: false
+    cf_orch:
+      service: cf-text
+      model_candidates: []
+      ttl_s: 3600
+
 fallback_order:
   - anthropic
   - openai
