@@ -23,6 +23,7 @@ services:
       # CF_ORCH_URL routes LLM query builder through cf-orch for VRAM-aware scheduling.
       # Override in .env to use a different coordinator URL.
       CF_ORCH_URL: "http://host.docker.internal:7700"
+      CF_APP_NAME: snipe
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No network_mode: host — isolated on snipe-cloud-net; nginx reaches it via 'api:8510'
