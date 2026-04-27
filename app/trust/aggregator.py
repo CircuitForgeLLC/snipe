@@ -11,6 +11,15 @@ HARD_FILTER_AGE_DAYS = 7
 HARD_FILTER_BAD_RATIO_MIN_COUNT = 20
 HARD_FILTER_BAD_RATIO_THRESHOLD = 0.80
 
+# Above this lifetime count the 12-month ratio may cover only a tiny recent sample,
+# making a hard bad-actor flag disproportionate.  Instead we emit the softer
+# "declining_ratio" flag and let the composite score carry the penalty.
+# Note: buyer-feedback-only accounts (e.g. longtime buyers who start selling) are a
+# related edge case that requires profile-page scraping to detect properly — tracked
+# in snipe#52 as a medium-term fix.
+HARD_FILTER_BAD_RATIO_MAX_COUNT = 500
+HARD_FILTER_BAD_RATIO_HIGH_THRESHOLD = 0.60  # catastrophically bad even for high-volume
+
 # Sellers above this feedback count are treated as established retailers.
 # Stock photo reuse (duplicate_photo) is suppressed for them — large retailers
 # legitimately share manufacturer images across many listings.
@@ -117,11 +126,18 @@ class Aggregator:
         # Hard filters
         if seller and seller.account_age_days is not None and seller.account_age_days < HARD_FILTER_AGE_DAYS:
             red_flags.append("new_account")
-        if seller and (
-            seller.feedback_ratio < HARD_FILTER_BAD_RATIO_THRESHOLD
-            and seller.feedback_count > HARD_FILTER_BAD_RATIO_MIN_COUNT
-        ):
-            red_flags.append("established_bad_actor")
+        if seller and seller.feedback_ratio < HARD_FILTER_BAD_RATIO_THRESHOLD:
+            if HARD_FILTER_BAD_RATIO_MIN_COUNT < seller.feedback_count <= HARD_FILTER_BAD_RATIO_MAX_COUNT:
+                # Moderate-volume account with consistently bad ratio → hard flag.
+                red_flags.append("established_bad_actor")
+            elif seller.feedback_count > HARD_FILTER_BAD_RATIO_MAX_COUNT:
+                if seller.feedback_ratio < HARD_FILTER_BAD_RATIO_HIGH_THRESHOLD:
+                    # High-volume seller with catastrophic ratio → still hard flag.
+                    red_flags.append("established_bad_actor")
+                else:
+                    # High-volume seller with declining but not catastrophic ratio.
+                    # 12-month window may cover only a small recent sample — soft flag only.
+                    red_flags.append("declining_ratio")
         if seller and seller.feedback_count == 0:
             red_flags.append("zero_feedback")
             # Zero feedback is a deliberate signal, not missing data — cap composite score

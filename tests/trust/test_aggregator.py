@@ -232,6 +232,46 @@ def test_significant_price_drop_not_flagged_when_no_prior_price():
     assert "significant_price_drop" not in result.red_flags_json
 
 
+# ── declining_ratio (high-volume seller edge case, snipe#52) ─────────────────
+
+def test_declining_ratio_soft_flag_for_high_volume_seller():
+    """High-volume seller (count > 500) with declining but not catastrophic ratio
+    gets declining_ratio soft flag, NOT the hard established_bad_actor flag.
+
+    Edge case: 12-month ratio may reflect only a small recent sample for sellers
+    with large lifetime feedback counts — hard-flagging is disproportionate.
+    """
+    agg = Aggregator()
+    scores = {k: 10 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    high_vol = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=2000, feedback_count=800,  # count > 500
+        feedback_ratio=0.75,                         # < 0.80 but > 0.60
+        category_history_json="{}",
+    )
+    result = agg.aggregate(scores, photo_hash_duplicate=False, seller=high_vol)
+    assert "declining_ratio" in result.red_flags_json
+    assert "established_bad_actor" not in result.red_flags_json
+
+
+def test_established_bad_actor_still_fires_for_catastrophic_high_volume_ratio():
+    """High-volume seller (count > 500) with catastrophically bad ratio (< 60%)
+    still gets the hard established_bad_actor flag — not just declining_ratio."""
+    agg = Aggregator()
+    scores = {k: 10 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    bad_high_vol = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=2000, feedback_count=800,
+        feedback_ratio=0.50,  # < 0.60 threshold → still hard flag
+        category_history_json="{}",
+    )
+    result = agg.aggregate(scores, photo_hash_duplicate=False, seller=bad_high_vol)
+    assert "established_bad_actor" in result.red_flags_json
+    assert "declining_ratio" not in result.red_flags_json
+
+
 # ── established retailer ──────────────────────────────────────────────────────
 
 def test_established_retailer_suppresses_duplicate_photo():
