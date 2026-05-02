@@ -355,6 +355,9 @@
           </div>
         </div>
 
+        <!-- Loading (scraping in progress, no results yet) -->
+        <SearchProgress v-else-if="store.loading && !store.results.length" :query="store.query" />
+
         <!-- No results -->
         <div v-else-if="!store.results.length && !store.loading && store.query" class="results-empty">
           <p>No listings found for <strong>{{ store.query }}</strong>.</p>
@@ -375,8 +378,13 @@
               </span>
             </p>
             <div class="toolbar-actions">
+              <!-- Re-search indicator — loading while stale results are still visible -->
+              <span v-if="store.loading && store.results.length" class="enriching-badge enriching-badge--searching" aria-live="polite" title="Fetching new results…">
+                <span class="enriching-dot" aria-hidden="true"></span>
+                Re-searching…
+              </span>
               <!-- Live enrichment indicator — visible while SSE stream is open -->
-              <span v-if="store.enriching" class="enriching-badge" aria-live="polite" title="Scores updating as seller data arrives">
+              <span v-else-if="store.enriching" class="enriching-badge" aria-live="polite" title="Scores updating as seller data arrives">
                 <span class="enriching-dot" aria-hidden="true"></span>
                 Updating scores…
               </span>
@@ -456,6 +464,7 @@ import { useBlocklistStore } from '../stores/blocklist'
 import { useReportedStore } from '../stores/reported'
 import ListingCard from '../components/ListingCard.vue'
 import LLMQueryPanel from '../components/LLMQueryPanel.vue'
+import SearchProgress from '../components/SearchProgress.vue'
 
 const route = useRoute()
 const store = useSearchStore()
@@ -1438,6 +1447,16 @@ async function onSearch() {
   font-size: 0.75rem;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.enriching-badge--searching {
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-info) 30%, transparent);
+  color: var(--color-info);
+}
+
+.enriching-badge--searching .enriching-dot {
+  background: var(--color-info);
 }
 
 .enriching-dot {

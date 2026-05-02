@@ -21,6 +21,7 @@ import { useMotion } from './composables/useMotion'
 import { useSnipeMode } from './composables/useSnipeMode'
 import { useTheme } from './composables/useTheme'
 import { useKonamiCode } from './composables/useKonamiCode'
+import { useCandycoreMode } from './composables/useCandycoreMode'
 import { useSessionStore } from './stores/session'
 import { useBlocklistStore } from './stores/blocklist'
 import { usePreferencesStore } from './stores/preferences'
@@ -31,6 +32,8 @@ import FeedbackButton from './components/FeedbackButton.vue'
 const motion = useMotion()
 const { activate, restore } = useSnipeMode()
 const { restore: restoreTheme } = useTheme()
+const { restore: restoreCandy, useWordTrigger } = useCandycoreMode()
+useWordTrigger()
 const session = useSessionStore()
 const blocklistStore = useBlocklistStore()
 const preferencesStore = usePreferencesStore()
@@ -42,6 +45,7 @@ useKonamiCode(activate)
 onMounted(async () => {
   restore()                           // re-apply snipe mode from localStorage on hard reload
   restoreTheme()                      // re-apply explicit theme override on hard reload
+  restoreCandy()                      // re-apply candycore mode from localStorage on hard reload
   await session.bootstrap()           // fetch tier + feature flags from API
   blocklistStore.fetchBlocklist()     // pre-load so card block buttons reflect state immediately
   preferencesStore.load()             // load user preferences after session resolves
@@ -55,6 +59,12 @@ onMounted(async () => {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* Global keyboard focus indicator — safety net so no stylesheet can silently remove focus rings */
+:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
 }
 
 html {

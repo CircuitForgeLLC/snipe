@@ -87,7 +87,7 @@
    Snipe Mode data attribute overrides this via higher specificity.
 */
 /* Explicit dark override — beats OS preference when user forces dark in Settings */
-[data-theme="dark"]:not([data-snipe-mode="active"]) {
+[data-theme="dark"]:not([data-snipe-mode="active"]):not([data-candycore="active"]) {
   --color-surface:        #0d1117;
   --color-surface-2:      #161b22;
   --color-surface-raised: #1c2129;
@@ -113,7 +113,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]):not([data-snipe-mode="active"]) {
+  :root:not([data-theme="dark"]):not([data-snipe-mode="active"]):not([data-candycore="active"]) {
     /* Surfaces — warm cream, like a tactical field notebook */
     --color-surface:        #f8f5ee;
     --color-surface-2:      #f0ece3;
@@ -153,7 +153,7 @@
 }
 
 /* Explicit light override — beats OS preference when user forces light in Settings */
-[data-theme="light"]:not([data-snipe-mode="active"]) {
+[data-theme="light"]:not([data-snipe-mode="active"]):not([data-candycore="active"]) {
   --color-surface:        #f8f5ee;
   --color-surface-2:      #f0ece3;
   --color-surface-raised: #e8e3d8;
@@ -176,6 +176,56 @@
   --shadow-sm: 0 1px 3px rgba(60,45,20,0.12), 0 1px 2px rgba(60,45,20,0.08);
   --shadow-md: 0 4px 12px rgba(60,45,20,0.15), 0 2px 4px rgba(60,45,20,0.1);
   --shadow-lg: 0 10px 30px rgba(60,45,20,0.2), 0 4px 8px rgba(60,45,20,0.1);
+}
+
+/* ── Candycore easter egg theme ─────────────────────
+   Activated by typing "neon" outside a form field (tribute to artist Neon).
+   Palette sourced from snipe_v0_Neon_IPad_Paint.jpeg:
+     purple-black sky + lavender primary + cyan glow + yellow crown + pink text.
+   Stored as 'cf-candycore' in localStorage.
+   Applied: document.documentElement.dataset.candycore = 'active'
+   NOTE: Snipe Mode is declared last and overrides this when both are active.
+*/
+[data-candycore="active"] {
+  --app-primary:       #c77dff;
+  --app-primary-hover: #a855f7;
+  --app-primary-light: rgba(199, 125, 255, 0.15);
+
+  /* Purple-black night sky */
+  --color-surface:        #08051a;
+  --color-surface-2:      #100d28;
+  --color-surface-raised: #1a1248;
+
+  /* Purple glow borders */
+  --color-border:       rgba(199, 125, 255, 0.20);
+  --color-border-light: rgba(199, 125, 255, 0.10);
+
+  /* Candy-floss text — pink-white, muted bubblegum */
+  --color-text:         #ffd6f5;
+  --color-text-muted:   #f09099;
+  --color-text-inverse: #08051a;
+
+  /* Trust signals — straight from the painting */
+  --trust-high: #00c8e0;  /* cyan (outline glow) = good */
+  --trust-mid:  #ffe520;  /* yellow (crown stripe) = caution */
+  --trust-low:  #ff6eb4;  /* hot pink = danger */
+
+  /* Semantic */
+  --color-success: #00c8e0;
+  --color-error:   #ff6eb4;
+  --color-warning: #ffe520;
+  --color-info:    #c77dff;
+  --color-accent:  #00c8e0;  /* cyan accent */
+
+  /* Purple glow shadows */
+  --shadow-sm: 0 1px 3px rgba(199, 125, 255, 0.12);
+  --shadow-md: 0 4px 12px rgba(199, 125, 255, 0.20);
+  --shadow-lg: 0 10px 30px rgba(199, 125, 255, 0.28);
+
+  /* Glow helpers (used in scoped styles if needed) */
+  --candy-glow-xs: rgba(199, 125, 255, 0.08);
+  --candy-glow-sm: rgba(199, 125, 255, 0.18);
+  --candy-glow-md: rgba(199, 125, 255, 0.45);
 }
 
 /* ── Snipe Mode easter egg theme ─────────────────── */

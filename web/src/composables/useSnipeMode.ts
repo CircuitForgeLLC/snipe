@@ -58,6 +58,9 @@ export function useSnipeMode(audioEnabled = true) {
   }
 
   function activate() {
+    // Clear candycore if it's on — can't have both
+    delete document.documentElement.dataset.candycore
+    localStorage.removeItem('cf-candycore')
     active.value = true
     document.documentElement.dataset[DATA_ATTR] = 'active'
     localStorage.setItem(LS_KEY, 'active')
