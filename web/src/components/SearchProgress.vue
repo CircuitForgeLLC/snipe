@@ -7,7 +7,7 @@
 
     <!-- Status line -->
     <p class="progress-label">
-      Searching eBay for <strong>{{ query }}</strong>…
+      Searching <strong>{{ platformLabel }}</strong> for <strong>{{ query }}</strong>…
     </p>
 
     <!-- Skeleton listing cards -->
@@ -28,7 +28,19 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{ query: string }>()
+import { computed } from 'vue'
+
+const props = defineProps<{ query: string; platform?: string }>()
+
+const PLATFORM_LABELS: Record<string, string> = {
+  ebay: 'eBay',
+  mercari: 'Mercari',
+  poshmark: 'Poshmark',
+}
+
+const platformLabel = computed(() =>
+  PLATFORM_LABELS[props.platform ?? 'ebay'] ?? props.platform ?? 'eBay'
+)
 </script>
 
 <style scoped>

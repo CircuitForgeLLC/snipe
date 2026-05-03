@@ -7,6 +7,10 @@ from typing import Optional
 
 from app.db.models import Listing, Seller
 
+# Single source of truth for platform validation.
+# Phase 2 will extend this set as new adapters are implemented.
+SUPPORTED_PLATFORMS: frozenset[str] = frozenset({"ebay"})
+
 
 @dataclass
 class SearchFilters:
@@ -18,6 +22,8 @@ class SearchFilters:
     must_include: list[str] = field(default_factory=list)  # client-side title filter
     must_exclude: list[str] = field(default_factory=list)  # forwarded to eBay -term AND client-side
     category_id: Optional[str] = None                      # eBay category ID (e.g. "27386" = GPUs)
+    must_include_mode: str = "all"                         # "all" | "any" | "groups"
+    adapter: str = "auto"                                  # "auto" | "api" | "scraper"
 
 
 class PlatformAdapter(ABC):

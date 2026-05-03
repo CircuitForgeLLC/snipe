@@ -2,8 +2,29 @@
   <div class="search-view">
     <!-- Search bar -->
     <header class="search-header">
+      <div class="platform-tabs" role="tablist" aria-label="Search platform">
+        <button
+          v-for="p in PLATFORMS"
+          :key="p.value"
+          type="button"
+          role="tab"
+          class="platform-tab"
+          :class="{
+            'platform-tab--active': filters.platform === p.value,
+            'platform-tab--soon': !p.available,
+          }"
+          :aria-selected="filters.platform === p.value"
+          :disabled="!p.available"
+          :title="p.available ? p.label : `${p.label} — coming soon`"
+          @click="p.available && (filters.platform = p.value)"
+        >
+          {{ p.label }}
+          <span v-if="!p.available" class="platform-tab__soon">soon</span>
+        </button>
+      </div>
       <form class="search-form" @submit.prevent="onSearch" role="search">
         <div class="search-form-row1">
+          <template v-if="filters.platform === 'ebay' || !filters.platform">
           <label for="cat-select" class="sr-only">Category</label>
           <select
             id="cat-select"
@@ -20,6 +41,7 @@
               </option>
             </optgroup>
           </select>
+          </template>
           <label for="search-input" class="sr-only">Search listings</label>
           <input
             id="search-input"
@@ -116,6 +138,7 @@
 
         <!-- ── eBay Search Parameters ─────────────────────────────────────── -->
         <!-- These are sent to eBay. Changes require a new search to take effect. -->
+        <template v-if="filters.platform === 'ebay' || !filters.platform">
         <h2 class="filter-section-heading filter-section-heading--search">
           eBay Search
         </h2>
@@ -216,6 +239,7 @@
             <p class="filter-pages-hint">Excludes forwarded to eBay on re-search</p>
           </div>
         </fieldset>
+        </template>
 
         <!-- ── Post-search Filters ────────────────────────────────────────── -->
         <!-- Applied locally to current results — no re-search needed. -->
@@ -356,7 +380,7 @@
         </div>
 
         <!-- Loading (scraping in progress, no results yet) -->
-        <SearchProgress v-else-if="store.loading && !store.results.length" :query="store.query" />
+        <SearchProgress v-else-if="store.loading && !store.results.length" :query="store.query" :platform="filters.platform ?? 'ebay'" />
 
         <!-- No results -->
         <div v-else-if="!store.results.length && !store.loading && store.query" class="results-empty">
@@ -636,6 +660,7 @@ const DEFAULT_FILTERS: SearchFilters = {
   mustExclude: '',
   categoryId: '',
   adapter: 'auto' as 'auto' | 'api' | 'scraper',
+  platform: 'ebay',
 }
 
 const filters = reactive<SearchFilters>({ ...DEFAULT_FILTERS })
@@ -670,6 +695,12 @@ const parsedMustIncludeGroups = computed(() =>
     .map(group => group.split('|').map(t => t.trim().toLowerCase()).filter(Boolean))
     .filter(g => g.length > 0)
 )
+
+const PLATFORMS: { value: string; label: string; available: boolean }[] = [
+  { value: 'ebay',     label: 'eBay',     available: true },
+  { value: 'mercari',  label: 'Mercari',  available: false },
+  { value: 'poshmark', label: 'Poshmark', available: false },
+]
 
 const INCLUDE_MODES: { value: MustIncludeMode; label: string }[] = [
   { value: 'all',    label: 'All' },
@@ -1793,6 +1824,55 @@ async function onSearch() {
 @keyframes drawer-slide-down {
   from { opacity: 0; transform: translateY(-8px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Platform tab strip ──────────────────────────────────────────────── */
+.platform-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.platform-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+  white-space: nowrap;
+}
+
+.platform-tab:hover:not(:disabled):not(.platform-tab--active) {
+  border-color: var(--app-primary);
+  color: var(--app-primary);
+}
+
+.platform-tab--active {
+  background: var(--app-primary);
+  border-color: var(--app-primary);
+  color: var(--color-text-inverse);
+  font-weight: 600;
+}
+
+.platform-tab--soon {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.platform-tab__soon {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
 }
 
 </style>

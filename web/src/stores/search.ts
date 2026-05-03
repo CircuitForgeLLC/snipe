@@ -59,6 +59,11 @@ export interface SavedSearch {
   filters_json: string   // JSON blob of SearchFilters subset
   created_at: string | null
   last_run_at: string | null
+  // Monitor settings (migration 014)
+  monitor_enabled: boolean
+  poll_interval_min: number
+  min_trust_score: number
+  last_checked_at: string | null
 }
 
 export interface SearchParamsResult {
@@ -93,6 +98,7 @@ export interface SearchFilters {
   mustExclude?: string         // comma-separated; forwarded to eBay -term AND client-side
   categoryId?: string          // eBay category ID (e.g. "27386" = Graphics/Video Cards)
   adapter?: 'auto' | 'api' | 'scraper'  // override adapter selection
+  platform?: string            // target platform; defaults to 'ebay' when omitted
 }
 
 // ── Session cache ─────────────────────────────────────────────────────────────
@@ -173,6 +179,7 @@ export const useSearchStore = defineStore('search', () => {
       if (filters.mustExclude?.trim()) params.set('must_exclude', filters.mustExclude.trim())
       if (filters.categoryId?.trim()) params.set('category_id', filters.categoryId.trim())
       if (filters.adapter && filters.adapter !== 'auto') params.set('adapter', filters.adapter)
+      if (filters.platform && filters.platform !== 'ebay') params.set('platform', filters.platform)
 
       // Use the async endpoint: returns 202 immediately with a session_id, then
       // streams listings + trust scores via SSE as the scrape completes.

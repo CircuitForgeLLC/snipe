@@ -24,7 +24,7 @@ from circuitforge_core.affiliates import wrap_url as _wrap_affiliate_url
 from circuitforge_core.api import make_corrections_router as _make_corrections_router
 from circuitforge_core.api import make_feedback_router as _make_feedback_router
 from circuitforge_core.config import load_env
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ from api.ebay_webhook import router as ebay_webhook_router
 from app.db.models import SavedSearch as SavedSearchModel
 from app.db.models import ScammerEntry
 from app.db.store import Store
-from app.platforms import SearchFilters
+from app.platforms import SUPPORTED_PLATFORMS, SearchFilters
 from app.platforms.ebay.adapter import EbayAdapter
 from app.platforms.ebay.auth import EbayTokenManager
 from app.platforms.ebay.query_builder import expand_queries, parse_groups
@@ -674,6 +674,11 @@ def _make_adapter(shared_store: Store, force: str = "auto"):
 
     Adapters receive shared_store because they only read/write sellers and
     market_comps — never listings. Listings are returned and saved by the caller.
+
+    # Platform registry — add new adapters here as platforms are implemented.
+    # _make_adapter() currently handles eBay only. Phase 2 will add:
+    #   "mercari": MercariAdapter
+    #   "poshmark": PoshmarkAdapter
     """
     client_id, client_secret, env = _ebay_creds()
     has_creds = bool(client_id and client_secret)
@@ -713,8 +718,15 @@ def search(
     category_id: str = "",         # eBay category ID — forwarded to Browse API / scraper _sacat
     adapter: str = "auto",         # "auto" | "api" | "scraper" — override adapter selection
     refresh: bool = False,         # when True, bypass cache read (still writes fresh result)
+    platform: str = Query("ebay", description="Marketplace platform to search"),
     session: CloudUser = Depends(get_session),
 ):
+    if platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Platform {platform!r} is not yet supported. Supported: {sorted(SUPPORTED_PLATFORMS)}",
+        )
+
     # If the user pasted an eBay listing or checkout URL, extract the item ID
     # and use it as the search query so the exact item surfaces in results.
     ebay_item_id = _extract_ebay_item_id(q)
@@ -909,8 +921,8 @@ def search(
         raise HTTPException(status_code=502, detail=f"eBay search failed: {e}")
 
     log.info(
-        "search auth=%s tier=%s adapter=%s pages=%d queries=%d listings=%d q=%r",
-        _auth_label(session.user_id), session.tier, adapter_used,
+        "search platform=%s auth=%s tier=%s adapter=%s pages=%d queries=%d listings=%d q=%r",
+        platform, _auth_label(session.user_id), session.tier, adapter_used,
         pages, len(ebay_queries), len(listings), q,
     )
 
@@ -1073,6 +1085,7 @@ def search_async(
     category_id: str = "",
     adapter: str = "auto",
     refresh: bool = False,          # when True, bypass cache read (still writes fresh result)
+    platform: str = Query("ebay", description="Marketplace platform to search"),
     session: CloudUser = Depends(get_session),
 ):
     """Async variant of GET /api/search.
@@ -1088,6 +1101,12 @@ def search_async(
        "seller": {...}, "market_price": ...}              (enrichment updates)
       None                                               (sentinel — stream finished)
     """
+    if platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Platform {platform!r} is not yet supported. Supported: {sorted(SUPPORTED_PLATFORMS)}",
+        )
+
     # Validate / normalise params — same logic as synchronous endpoint.
     ebay_item_id = _extract_ebay_item_id(q)
     if ebay_item_id:
@@ -1285,8 +1304,8 @@ def search_async(
                 comps_future.result()
 
             log.info(
-                "async_search auth=%s tier=%s adapter=%s pages=%d listings=%d q=%r",
-                _auth_label(_user_id), _tier, adapter_used, pages, len(listings), q_norm,
+                "async_search platform=%s auth=%s tier=%s adapter=%s pages=%d listings=%d q=%r",
+                platform, _auth_label(_user_id), _tier, adapter_used, pages, len(listings), q_norm,
             )
 
             shared_store = Store(_shared_db)
