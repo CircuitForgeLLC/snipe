@@ -1,60 +1,58 @@
-"""Pre-warmed Chromium browser pool for the eBay scraper.
+"""Thread-local Playwright browser manager for the eBay scraper.
 
-Eliminates cold-start latency (5-10s per call) by keeping a small pool of
-long-lived Playwright browser instances with fresh contexts ready to serve.
+Each uvicorn worker thread that calls fetch_html() gets its own Playwright
+instance, browser, and context — created lazily on first use.  This avoids
+the "cannot switch to a different thread" error that arises when Playwright
+sync API instances are shared across threads (they bind their greenlet event
+loop to the creating thread).
 
 Key design:
-- Pool slots: ``(xvfb_proc, pw_instance, browser, context, display_num, last_used_ts)``
-  One headed Chromium browser per slot — keeps the Kasada fingerprint clean.
-- Display numbering: :200-:399 (avoids host :0 and low-numbered kernel socket conflicts).
-- Thread safety: ``queue.Queue`` with blocking get (timeout=3s before fresh fallback).
-- Replenishment: after each use, the dirty context is closed and a new context is
-  opened on the *same* browser, then returned to the queue.  Browser launch overhead
-  is only paid at startup and during idle-cleanup replenishment.
-- Idle cleanup: daemon thread closes slots idle for >5 minutes to avoid memory leaks
-  when the service is quiet.
-- Graceful degradation: if Playwright / Xvfb is unavailable (host-side test env),
-  ``fetch_html`` falls back to launching a fresh browser per call — same behavior
-  as before this module existed.
+- Thread-local: _thread_local.slot holds the _PooledBrowser for the current
+  thread.  No slot is ever handed to another thread.
+- Lazy creation: slots are created on first fetch_html() call per thread, not
+  at startup.  start() is a lightweight lifecycle marker only.
+- Registry: _slot_registry (keyed by thread-id) lets stop() close every active
+  slot across all threads without walking thread-local storage.
+- Replenishment: after each use the dirty context is closed and a fresh one
+  opened on the same browser.  Browser launch overhead is paid at most once
+  per worker thread lifetime.
+- Graceful degradation: if Playwright / Xvfb is unavailable, fetch_html falls
+  back to _fetch_fresh (identical behavior to before this module existed).
 
-Pool size is controlled via ``BROWSER_POOL_SIZE`` env var (default: 2).
+Pool size is read from BROWSER_POOL_SIZE env var (default: 2) but is now a
+soft limit — used only for documentation; actual concurrency is bounded by
+uvicorn's thread count.
 """
 from __future__ import annotations
 
 import itertools
 import logging
 import os
-import queue
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# Display counter shared by pool warmup and _fetch_fresh fallback.
-# Range :200-:399 avoids low-numbered displays that may be pre-occupied by
-# the host X server or lingering kernel sockets from previous runs.
 _pool_display_counter = itertools.cycle(range(200, 400))
 
-_IDLE_TIMEOUT_SECS = 300  # 5 minutes
-_CLEANUP_INTERVAL_SECS = 60
-_QUEUE_TIMEOUT_SECS = 3.0
-
 _CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
-_XVFB_ARGS = ["-screen", "0", "1280x800x24", "-ac"]  # -ac: disable X auth (safe in isolated Docker)
+_XVFB_ARGS = ["-screen", "0", "1280x800x24", "-ac"]
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 _VIEWPORT = {"width": 1280, "height": 800}
 
+# Thread-local storage: each thread gets its own _PooledBrowser slot.
+_thread_local = threading.local()
+
 
 @dataclass
 class _PooledBrowser:
-    """One slot in the browser pool."""
+    """One browser slot, bound to a single thread."""
     xvfb: subprocess.Popen
     pw: object          # playwright instance (sync_playwright().__enter__())
     browser: object     # playwright Browser
@@ -63,13 +61,13 @@ class _PooledBrowser:
     last_used_ts: float = field(default_factory=time.time)
 
 
-def _launch_slot() -> "_PooledBrowser":
+def _launch_slot() -> _PooledBrowser:
     """Launch a new Xvfb display + headed Chromium browser + fresh context.
 
-    Raises on failure — callers must catch and handle gracefully.
+    Must be called from the thread that will use the slot.
     """
     from playwright.sync_api import sync_playwright
-    from playwright_stealth import Stealth  # noqa: F401 — imported here to confirm availability
+    from playwright_stealth import Stealth  # noqa: F401
 
     display_num = next(_pool_display_counter)
     display = f":{display_num}"
@@ -81,7 +79,6 @@ def _launch_slot() -> "_PooledBrowser":
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    # Small grace period for Xvfb to bind the display socket.
     time.sleep(0.3)
 
     pw = sync_playwright().start()
@@ -112,7 +109,7 @@ def _launch_slot() -> "_PooledBrowser":
 
 
 def _close_slot(slot: _PooledBrowser) -> None:
-    """Cleanly close a pool slot: context → browser → Playwright → Xvfb."""
+    """Cleanly close a slot: context → browser → Playwright → Xvfb."""
     try:
         slot.ctx.close()
     except Exception:
@@ -133,11 +130,7 @@ def _close_slot(slot: _PooledBrowser) -> None:
 
 
 def _replenish_slot(slot: _PooledBrowser) -> _PooledBrowser:
-    """Close the used context and open a fresh one on the same browser.
-
-    Returns a new _PooledBrowser sharing the same xvfb/pw/browser but with a
-    clean context — avoids paying browser launch overhead on every fetch.
-    """
+    """Close the used context and open a fresh one on the same browser."""
     try:
         slot.ctx.close()
     except Exception:
@@ -158,26 +151,27 @@ def _replenish_slot(slot: _PooledBrowser) -> _PooledBrowser:
 
 
 class BrowserPool:
-    """Thread-safe pool of pre-warmed Playwright browser contexts."""
+    """Thread-local Playwright browser manager.
+
+    Each thread that calls fetch_html() owns its own browser instance.
+    No slots are shared between threads.
+    """
 
     def __init__(self, size: int = 2) -> None:
         self._size = size
-        self._q: queue.Queue[_PooledBrowser] = queue.Queue()
         self._lock = threading.Lock()
         self._started = False
         self._stopped = False
-        self._playwright_available: Optional[bool] = None  # cached after first check
+        self._playwright_available: Optional[bool] = None
+        # Registry of all active slots keyed by thread id — used only by stop().
+        self._slot_registry: dict[int, _PooledBrowser] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Pre-warm N browser slots in background threads.
-
-        Non-blocking: returns immediately; slots appear in the queue as they
-        finish launching.  Safe to call multiple times (no-op after first).
-        """
+        """Mark the pool as started.  Slots are created lazily per thread."""
         with self._lock:
             if self._started:
                 return
@@ -190,43 +184,19 @@ class BrowserPool:
             )
             return
 
-        def _warm_one(_: int) -> None:
-            try:
-                slot = _launch_slot()
-                self._q.put(slot)
-                log.debug("BrowserPool: slot :%d ready", slot.display_num)
-            except Exception as exc:
-                log.warning("BrowserPool: pre-warm failed: %s", exc)
-
-        with ThreadPoolExecutor(max_workers=self._size) as ex:
-            futures = [ex.submit(_warm_one, i) for i in range(self._size)]
-            # Don't wait — executor exits after submitting, threads continue.
-            # Actually ThreadPoolExecutor.__exit__ waits for completion, which
-            # is fine: pre-warming completes in background relative to FastAPI
-            # startup because this whole method is called from a thread.
-            for f in as_completed(futures):
-                pass  # propagate exceptions via logging, not raises
-
-        _idle_cleaner = threading.Thread(
-            target=self._idle_cleanup_loop, daemon=True, name="browser-pool-idle-cleaner"
-        )
-        _idle_cleaner.start()
-        log.info("BrowserPool: started with %d slots", self._q.qsize())
+        log.info("BrowserPool: started (thread-local mode, size hint=%d)", self._size)
 
     def stop(self) -> None:
-        """Drain and close all pool slots. Called at FastAPI shutdown."""
+        """Close all active slots across all threads."""
         with self._lock:
             self._stopped = True
+            registry_snapshot = dict(self._slot_registry)
 
         closed = 0
-        while True:
-            try:
-                slot = self._q.get_nowait()
-                _close_slot(slot)
-                closed += 1
-            except queue.Empty:
-                break
-
+        for slot in registry_snapshot.values():
+            _close_slot(slot)
+            closed += 1
+        self._slot_registry.clear()
         log.info("BrowserPool: stopped, closed %d slot(s)", closed)
 
     # ------------------------------------------------------------------
@@ -242,28 +212,13 @@ class BrowserPool:
     ) -> str:
         """Navigate to *url* and return the rendered HTML.
 
-        Borrows a browser context from the pool (blocks up to 3s), uses it to
-        fetch the page, then replenishes the slot with a fresh context.
-
-        Falls back to a fully fresh browser if the pool is empty after the
-        timeout or if Playwright is unavailable.
-
-        Args:
-            wait_for_selector: CSS/data-testid selector to wait for before capturing
-                HTML (e.g. ``"[data-testid='SearchResults']"``).  When set, the fixed
-                *wait_for_timeout_ms* sleep is skipped — the page is captured as soon
-                as the selector appears (or after 15s timeout, whichever comes first).
-            wait_for_timeout_ms: static post-navigation sleep in ms when
-                *wait_for_selector* is None.  Default 2000; set higher (e.g. 8000)
-                for sites with JS challenge pages (Cloudflare Turnstile).
+        Uses the calling thread's browser slot (creates one if needed).
+        Falls back to a fresh browser if Playwright is unavailable or the
+        slot fails.
         """
         time.sleep(delay)
 
-        slot: Optional[_PooledBrowser] = None
-        try:
-            slot = self._q.get(timeout=_QUEUE_TIMEOUT_SECS)
-        except queue.Empty:
-            log.debug("BrowserPool: pool empty after %.1fs — using fresh browser", _QUEUE_TIMEOUT_SECS)
+        slot = self._get_or_create_thread_slot()
 
         if slot is not None:
             try:
@@ -272,20 +227,19 @@ class BrowserPool:
                     wait_for_selector=wait_for_selector,
                     wait_for_timeout_ms=wait_for_timeout_ms,
                 )
-                # Replenish: close dirty context, open fresh one, return to queue.
                 try:
                     fresh_slot = _replenish_slot(slot)
-                    self._q.put(fresh_slot)
+                    self._register_slot(fresh_slot)
                 except Exception as exc:
                     log.warning("BrowserPool: replenish failed, slot discarded: %s", exc)
                     _close_slot(slot)
+                    self._unregister_slot()
                 return html
             except Exception as exc:
                 log.warning("BrowserPool: pooled fetch failed (%s) — closing slot", exc)
                 _close_slot(slot)
-                # Fall through to fresh browser below.
+                self._unregister_slot()
 
-        # Fallback: fresh browser (same code as old scraper._fetch_url).
         return self._fetch_fresh(
             url,
             wait_for_selector=wait_for_selector,
@@ -293,11 +247,45 @@ class BrowserPool:
         )
 
     # ------------------------------------------------------------------
+    # Thread-local slot management
+    # ------------------------------------------------------------------
+
+    def _get_or_create_thread_slot(self) -> Optional[_PooledBrowser]:
+        """Return the calling thread's slot, creating it if absent."""
+        if not self._check_playwright():
+            return None
+
+        slot: Optional[_PooledBrowser] = getattr(_thread_local, "slot", None)
+        if slot is not None:
+            return slot
+
+        try:
+            slot = _launch_slot()
+            self._register_slot(slot)
+            log.debug("BrowserPool: launched slot :%d for thread %d",
+                      slot.display_num, threading.get_ident())
+            return slot
+        except Exception as exc:
+            log.warning("BrowserPool: slot launch failed: %s", exc)
+            return None
+
+    def _register_slot(self, slot: _PooledBrowser) -> None:
+        """Bind slot to the calling thread (both thread-local and registry)."""
+        _thread_local.slot = slot
+        with self._lock:
+            self._slot_registry[threading.get_ident()] = slot
+
+    def _unregister_slot(self) -> None:
+        """Remove the calling thread's slot from thread-local and registry."""
+        _thread_local.slot = None
+        with self._lock:
+            self._slot_registry.pop(threading.get_ident(), None)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _check_playwright(self) -> bool:
-        """Return True if Playwright and Xvfb are importable/runnable."""
         if self._playwright_available is not None:
             return self._playwright_available
         try:
@@ -315,7 +303,6 @@ class BrowserPool:
         wait_for_selector: Optional[str] = None,
         wait_for_timeout_ms: int = 2000,
     ) -> str:
-        """Open a new page on *slot.ctx*, navigate to *url*, return HTML."""
         from playwright_stealth import Stealth
 
         page = slot.ctx.new_page()
@@ -326,7 +313,7 @@ class BrowserPool:
                 try:
                     page.wait_for_selector(wait_for_selector, timeout=15_000)
                 except Exception:
-                    pass  # selector didn't appear; return whatever loaded
+                    pass
             else:
                 page.wait_for_timeout(wait_for_timeout_ms)
             return page.content()
@@ -342,7 +329,6 @@ class BrowserPool:
         wait_for_selector: Optional[str] = None,
         wait_for_timeout_ms: int = 2000,
     ) -> str:
-        """Launch a fully fresh browser, fetch *url*, close everything."""
         import subprocess as _subprocess
 
         try:
@@ -364,7 +350,7 @@ class BrowserPool:
             stdout=_subprocess.DEVNULL,
             stderr=_subprocess.DEVNULL,
         )
-        time.sleep(0.3)  # wait for Xvfb to bind the display socket before Chromium starts
+        time.sleep(0.3)
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(
@@ -383,7 +369,7 @@ class BrowserPool:
                     try:
                         page.wait_for_selector(wait_for_selector, timeout=15_000)
                     except Exception:
-                        pass  # selector didn't appear; return whatever loaded
+                        pass
                 else:
                     page.wait_for_timeout(wait_for_timeout_ms)
                 html = page.content()
@@ -393,32 +379,6 @@ class BrowserPool:
             xvfb.wait()
 
         return html
-
-    def _idle_cleanup_loop(self) -> None:
-        """Daemon thread: drain slots idle for >5 minutes every 60 seconds."""
-        while not self._stopped:
-            time.sleep(_CLEANUP_INTERVAL_SECS)
-            if self._stopped:
-                break
-            now = time.time()
-            idle_cutoff = now - _IDLE_TIMEOUT_SECS
-            # Drain the entire queue, keep non-idle slots, close idle ones.
-            kept: list[_PooledBrowser] = []
-            closed = 0
-            while True:
-                try:
-                    slot = self._q.get_nowait()
-                except queue.Empty:
-                    break
-                if slot.last_used_ts < idle_cutoff:
-                    _close_slot(slot)
-                    closed += 1
-                else:
-                    kept.append(slot)
-            for slot in kept:
-                self._q.put(slot)
-            if closed:
-                log.info("BrowserPool: idle cleanup closed %d slot(s)", closed)
 
 
 # ---------------------------------------------------------------------------
@@ -430,11 +390,7 @@ _pool_lock = threading.Lock()
 
 
 def get_pool() -> BrowserPool:
-    """Return the module-level BrowserPool singleton (creates it if needed).
-
-    Pool size is read from ``BROWSER_POOL_SIZE`` env var (default: 2).
-    Call ``get_pool().start()`` at FastAPI startup to pre-warm slots.
-    """
+    """Return the module-level BrowserPool singleton (creates it if needed)."""
     global _pool
     if _pool is None:
         with _pool_lock:

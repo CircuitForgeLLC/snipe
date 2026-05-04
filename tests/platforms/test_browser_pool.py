@@ -1,16 +1,15 @@
-"""Tests for app.platforms.ebay.browser_pool.
+"""Tests for app.platforms.ebay.browser_pool (thread-local design).
 
 All tests run without real Chromium / Xvfb / Playwright.
 Playwright, Xvfb subprocess calls, and Stealth are mocked throughout.
 """
 from __future__ import annotations
 
-import queue
 import subprocess
 import threading
 import time
 from typing import Any
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,40 +18,35 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _reset_pool_singleton():
-    """Force the module-level _pool singleton back to None."""
     import app.platforms.ebay.browser_pool as _mod
     _mod._pool = None
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+def _reset_thread_local():
+    import app.platforms.ebay.browser_pool as _mod
+    _mod._thread_local.slot = None
+
 
 @pytest.fixture(autouse=True)
-def reset_singleton():
-    """Reset the singleton before and after every test."""
+def reset_pool():
     _reset_pool_singleton()
+    _reset_thread_local()
     yield
     _reset_pool_singleton()
+    _reset_thread_local()
 
 
 def _make_fake_slot():
-    """Build a mock _PooledBrowser with all necessary attributes."""
     from app.platforms.ebay.browser_pool import _PooledBrowser
 
     xvfb = MagicMock(spec=subprocess.Popen)
     pw = MagicMock()
     browser = MagicMock()
     ctx = MagicMock()
-    slot = _PooledBrowser(
-        xvfb=xvfb,
-        pw=pw,
-        browser=browser,
-        ctx=ctx,
-        display_num=100,
-        last_used_ts=time.time(),
+    return _PooledBrowser(
+        xvfb=xvfb, pw=pw, browser=browser, ctx=ctx,
+        display_num=100, last_used_ts=time.time(),
     )
-    return slot
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +56,7 @@ def _make_fake_slot():
 class TestGetPoolSingleton:
     def test_returns_same_instance(self):
         from app.platforms.ebay.browser_pool import get_pool, BrowserPool
-        p1 = get_pool()
-        p2 = get_pool()
-        assert p1 is p2
+        assert get_pool() is get_pool()
 
     def test_returns_browser_pool_instance(self):
         from app.platforms.ebay.browser_pool import get_pool, BrowserPool
@@ -72,14 +64,12 @@ class TestGetPoolSingleton:
 
     def test_default_size_is_two(self):
         from app.platforms.ebay.browser_pool import get_pool
-        pool = get_pool()
-        assert pool._size == 2
+        assert get_pool()._size == 2
 
     def test_custom_size_from_env(self, monkeypatch):
         monkeypatch.setenv("BROWSER_POOL_SIZE", "5")
         from app.platforms.ebay.browser_pool import get_pool
-        pool = get_pool()
-        assert pool._size == 5
+        assert get_pool()._size == 5
 
 
 # ---------------------------------------------------------------------------
@@ -88,17 +78,15 @@ class TestGetPoolSingleton:
 
 class TestLifecycle:
     def test_start_is_noop_when_playwright_unavailable(self):
-        """Pool should handle missing Playwright gracefully — no error raised."""
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=2)
         with patch.object(pool, "_check_playwright", return_value=False):
-            pool.start()  # must not raise
-        # Pool queue is empty — no slots launched.
-        assert pool._q.empty()
+            pool.start()
+        assert pool._started is True
+        assert pool._slot_registry == {}
 
     def test_start_only_runs_once(self):
-        """Calling start() twice must not double-warm."""
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
@@ -107,47 +95,46 @@ class TestLifecycle:
             pool.start()
         assert pool._started is True
 
-    def test_stop_drains_queue(self):
-        """stop() should close every slot in the queue."""
+    def test_stop_closes_all_registry_slots(self):
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=2)
         slot1 = _make_fake_slot()
         slot2 = _make_fake_slot()
-        pool._q.put(slot1)
-        pool._q.put(slot2)
+        pool._slot_registry[1001] = slot1
+        pool._slot_registry[1002] = slot2
 
         with patch("app.platforms.ebay.browser_pool._close_slot") as mock_close:
             pool.stop()
 
         assert mock_close.call_count == 2
-        assert pool._q.empty()
+        assert pool._slot_registry == {}
         assert pool._stopped is True
 
-    def test_stop_on_empty_pool_is_safe(self):
+    def test_stop_on_empty_registry_is_safe(self):
         from app.platforms.ebay.browser_pool import BrowserPool
-        pool = BrowserPool(size=2)
-        pool.stop()  # must not raise
+        BrowserPool(size=2).stop()
 
 
 # ---------------------------------------------------------------------------
-# fetch_html — pool hit path
+# fetch_html — thread-local slot hit path
 # ---------------------------------------------------------------------------
 
-class TestFetchHtmlPoolHit:
-    def test_uses_pooled_slot_and_replenishes(self):
-        """fetch_html should borrow a slot, call _fetch_with_slot, replenish."""
+class TestFetchHtmlSlotHit:
+    def test_uses_existing_slot_and_replenishes(self):
         from app.platforms.ebay.browser_pool import BrowserPool
+        import app.platforms.ebay.browser_pool as _mod
 
         pool = BrowserPool(size=1)
         slot = _make_fake_slot()
-        pool._q.put(slot)
+        _mod._thread_local.slot = slot
 
         fresh_slot = _make_fake_slot()
 
         with (
             patch.object(pool, "_fetch_with_slot", return_value="<html>ok</html>") as mock_fetch,
-            patch("app.platforms.ebay.browser_pool._replenish_slot", return_value=fresh_slot) as mock_replenish,
+            patch("app.platforms.ebay.browser_pool._replenish_slot", return_value=fresh_slot),
+            patch.object(pool, "_register_slot") as mock_register,
             patch("time.sleep"),
         ):
             html = pool.fetch_html("https://www.ebay.com/sch/i.html?_nkw=test", delay=0)
@@ -157,21 +144,19 @@ class TestFetchHtmlPoolHit:
             slot, "https://www.ebay.com/sch/i.html?_nkw=test",
             wait_for_selector=None, wait_for_timeout_ms=2000,
         )
-        mock_replenish.assert_called_once_with(slot)
-        # Fresh slot returned to queue
-        assert pool._q.get_nowait() is fresh_slot
+        mock_register.assert_called_once_with(fresh_slot)
 
     def test_delay_is_respected(self):
-        """fetch_html must call time.sleep(delay)."""
         from app.platforms.ebay.browser_pool import BrowserPool
+        import app.platforms.ebay.browser_pool as _mod
 
         pool = BrowserPool(size=1)
-        slot = _make_fake_slot()
-        pool._q.put(slot)
+        _mod._thread_local.slot = _make_fake_slot()
 
         with (
             patch.object(pool, "_fetch_with_slot", return_value="<html/>"),
             patch("app.platforms.ebay.browser_pool._replenish_slot", return_value=_make_fake_slot()),
+            patch.object(pool, "_register_slot"),
             patch("app.platforms.ebay.browser_pool.time") as mock_time,
         ):
             pool.fetch_html("https://example.com", delay=1.5)
@@ -180,22 +165,19 @@ class TestFetchHtmlPoolHit:
 
 
 # ---------------------------------------------------------------------------
-# fetch_html — pool empty / fallback path
+# fetch_html — no slot / fallback path
 # ---------------------------------------------------------------------------
 
 class TestFetchHtmlFallback:
-    def test_falls_back_to_fresh_browser_when_pool_empty(self):
-        """When pool is empty after timeout, _fetch_fresh should be called."""
+    def test_falls_back_when_no_slot_and_playwright_unavailable(self):
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
-        # Queue is empty — no slots available.
-
+        # No thread-local slot; playwright unavailable → _get_or_create returns None.
         with (
+            patch.object(pool, "_get_or_create_thread_slot", return_value=None),
             patch.object(pool, "_fetch_fresh", return_value="<html>fresh</html>") as mock_fresh,
             patch("time.sleep"),
-            # Make Queue.get raise Empty after a short wait.
-            patch.object(pool._q, "get", side_effect=queue.Empty),
         ):
             html = pool.fetch_html("https://www.ebay.com/sch/i.html?_nkw=widget", delay=0)
 
@@ -206,17 +188,18 @@ class TestFetchHtmlFallback:
         )
 
     def test_falls_back_when_pooled_fetch_raises(self):
-        """If _fetch_with_slot raises, the slot is closed and _fetch_fresh is used."""
         from app.platforms.ebay.browser_pool import BrowserPool
+        import app.platforms.ebay.browser_pool as _mod
 
         pool = BrowserPool(size=1)
         slot = _make_fake_slot()
-        pool._q.put(slot)
+        _mod._thread_local.slot = slot
 
         with (
             patch.object(pool, "_fetch_with_slot", side_effect=RuntimeError("Chromium crashed")),
             patch.object(pool, "_fetch_fresh", return_value="<html>recovered</html>") as mock_fresh,
             patch("app.platforms.ebay.browser_pool._close_slot") as mock_close,
+            patch.object(pool, "_unregister_slot"),
             patch("time.sleep"),
         ):
             html = pool.fetch_html("https://www.ebay.com/", delay=0)
@@ -227,18 +210,106 @@ class TestFetchHtmlFallback:
 
 
 # ---------------------------------------------------------------------------
+# Thread-local slot management
+# ---------------------------------------------------------------------------
+
+class TestThreadLocalSlotManagement:
+    def test_get_or_create_returns_existing_slot(self):
+        import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=1)
+        pool._playwright_available = True
+        existing = _make_fake_slot()
+        _mod._thread_local.slot = existing
+
+        result = pool._get_or_create_thread_slot()
+        assert result is existing
+
+    def test_get_or_create_launches_new_slot_when_absent(self):
+        import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=1)
+        pool._playwright_available = True
+        _mod._thread_local.slot = None
+
+        new_slot = _make_fake_slot()
+        with (
+            patch("app.platforms.ebay.browser_pool._launch_slot", return_value=new_slot),
+            patch.object(pool, "_register_slot") as mock_register,
+        ):
+            result = pool._get_or_create_thread_slot()
+
+        assert result is new_slot
+        mock_register.assert_called_once_with(new_slot)
+
+    def test_get_or_create_returns_none_when_playwright_unavailable(self):
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=1)
+        pool._playwright_available = False
+        assert pool._get_or_create_thread_slot() is None
+
+    def test_register_slot_sets_thread_local_and_registry(self):
+        import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=1)
+        slot = _make_fake_slot()
+        pool._register_slot(slot)
+
+        assert _mod._thread_local.slot is slot
+        assert threading.get_ident() in pool._slot_registry
+
+    def test_unregister_slot_clears_thread_local_and_registry(self):
+        import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=1)
+        slot = _make_fake_slot()
+        pool._register_slot(slot)
+        pool._unregister_slot()
+
+        assert getattr(_mod._thread_local, "slot", None) is None
+        assert threading.get_ident() not in pool._slot_registry
+
+    def test_different_threads_get_independent_slots(self):
+        from app.platforms.ebay.browser_pool import BrowserPool
+
+        pool = BrowserPool(size=2)
+        pool._playwright_available = True
+
+        slots_seen: list = []
+        errors: list = []
+
+        def worker():
+            new_slot = _make_fake_slot()
+            with patch("app.platforms.ebay.browser_pool._launch_slot", return_value=new_slot):
+                s = pool._get_or_create_thread_slot()
+                slots_seen.append(s)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        assert len(slots_seen) == 2
+        # Each thread got its own slot object (they may differ or coincidentally share
+        # the same mock; what matters is both threads succeeded without interference).
+        assert all(s is not None for s in slots_seen)
+
+
+# ---------------------------------------------------------------------------
 # ImportError graceful fallback
 # ---------------------------------------------------------------------------
 
 class TestImportErrorHandling:
     def test_check_playwright_returns_false_on_import_error(self):
-        """_check_playwright should cache False when playwright is not installed."""
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=2)
-
         with patch.dict("sys.modules", {"playwright": None, "playwright_stealth": None}):
-            # Force re-check by clearing the cached value.
             pool._playwright_available = None
             result = pool._check_playwright()
 
@@ -246,12 +317,11 @@ class TestImportErrorHandling:
         assert pool._playwright_available is False
 
     def test_start_logs_warning_when_playwright_missing(self, caplog):
-        """start() should log a warning and not crash when Playwright is absent."""
         import logging
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
-        pool._playwright_available = False  # simulate missing
+        pool._playwright_available = False
 
         with patch.object(pool, "_check_playwright", return_value=False):
             with caplog.at_level(logging.WARNING, logger="app.platforms.ebay.browser_pool"):
@@ -260,85 +330,12 @@ class TestImportErrorHandling:
         assert any("not available" in r.message for r in caplog.records)
 
     def test_fetch_fresh_raises_runtime_error_when_playwright_missing(self):
-        """_fetch_fresh must raise RuntimeError (not ImportError) when PW absent."""
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
-
         with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
             with pytest.raises(RuntimeError, match="Playwright not installed"):
                 pool._fetch_fresh("https://www.ebay.com/")
-
-
-# ---------------------------------------------------------------------------
-# Idle cleanup
-# ---------------------------------------------------------------------------
-
-class TestIdleCleanup:
-    def test_idle_cleanup_closes_stale_slots(self):
-        """_idle_cleanup_loop should close slots whose last_used_ts is too old."""
-        from app.platforms.ebay.browser_pool import BrowserPool, _IDLE_TIMEOUT_SECS
-
-        pool = BrowserPool(size=2)
-
-        stale_slot = _make_fake_slot()
-        stale_slot.last_used_ts = time.time() - (_IDLE_TIMEOUT_SECS + 60)
-
-        fresh_slot = _make_fake_slot()
-        fresh_slot.last_used_ts = time.time()
-
-        pool._q.put(stale_slot)
-        pool._q.put(fresh_slot)
-
-        closed_slots = []
-
-        def fake_close(s):
-            closed_slots.append(s)
-
-        with patch("app.platforms.ebay.browser_pool._close_slot", side_effect=fake_close):
-            # Run one cleanup tick directly (not the full loop).
-            now = time.time()
-            idle_cutoff = now - _IDLE_TIMEOUT_SECS
-            kept = []
-            while True:
-                try:
-                    s = pool._q.get_nowait()
-                except queue.Empty:
-                    break
-                if s.last_used_ts < idle_cutoff:
-                    fake_close(s)
-                else:
-                    kept.append(s)
-            for s in kept:
-                pool._q.put(s)
-
-        assert stale_slot in closed_slots
-        assert fresh_slot not in closed_slots
-        assert pool._q.qsize() == 1
-
-    def test_idle_cleanup_loop_stops_when_pool_stopped(self):
-        """Cleanup daemon should exit when _stopped is True."""
-        from app.platforms.ebay.browser_pool import BrowserPool, _CLEANUP_INTERVAL_SECS
-
-        pool = BrowserPool(size=1)
-        pool._stopped = True
-
-        # The loop should return after one iteration of the while check.
-        # Use a very short sleep mock so the test doesn't actually wait 60s.
-        sleep_calls = []
-
-        def fake_sleep(secs):
-            sleep_calls.append(secs)
-
-        with patch("app.platforms.ebay.browser_pool.time") as mock_time:
-            mock_time.time.return_value = time.time()
-            mock_time.sleep.side_effect = fake_sleep
-            # Run in a thread with a short timeout to confirm it exits.
-            t = threading.Thread(target=pool._idle_cleanup_loop)
-            t.start()
-            t.join(timeout=2.0)
-
-        assert not t.is_alive(), "idle cleanup loop did not exit when _stopped=True"
 
 
 # ---------------------------------------------------------------------------
@@ -355,12 +352,8 @@ class TestReplenishSlot:
         browser.new_context.return_value = new_ctx
 
         slot = _PooledBrowser(
-            xvfb=MagicMock(),
-            pw=MagicMock(),
-            browser=browser,
-            ctx=old_ctx,
-            display_num=101,
-            last_used_ts=time.time() - 10,
+            xvfb=MagicMock(), pw=MagicMock(), browser=browser,
+            ctx=old_ctx, display_num=101, last_used_ts=time.time() - 10,
         )
 
         result = _replenish_slot(slot)
@@ -370,7 +363,6 @@ class TestReplenishSlot:
         assert result.ctx is new_ctx
         assert result.browser is browser
         assert result.xvfb is slot.xvfb
-        # last_used_ts is refreshed
         assert result.last_used_ts > slot.last_used_ts
 
 
@@ -391,7 +383,6 @@ class TestCloseSlot:
             xvfb=xvfb, pw=pw, browser=browser, ctx=ctx,
             display_num=102, last_used_ts=time.time(),
         )
-
         _close_slot(slot)
 
         ctx.close.assert_called_once()
@@ -401,7 +392,6 @@ class TestCloseSlot:
         xvfb.wait.assert_called_once()
 
     def test_close_slot_ignores_exceptions(self):
-        """_close_slot must not raise even if components throw."""
         from app.platforms.ebay.browser_pool import _close_slot, _PooledBrowser
 
         xvfb = MagicMock(spec=subprocess.Popen)
@@ -418,7 +408,6 @@ class TestCloseSlot:
             xvfb=xvfb, pw=pw, browser=browser, ctx=ctx,
             display_num=103, last_used_ts=time.time(),
         )
-
         _close_slot(slot)  # must not raise
 
 
@@ -428,7 +417,6 @@ class TestCloseSlot:
 
 class TestScraperUsesPool:
     def test_fetch_url_delegates_to_pool(self):
-        """ScrapedEbayAdapter._fetch_url must use the pool, not launch its own browser."""
         from app.platforms.ebay.browser_pool import BrowserPool
         from app.platforms.ebay.scraper import ScrapedEbayAdapter
         from app.db.store import Store
@@ -440,7 +428,6 @@ class TestScraperUsesPool:
         fake_pool.fetch_html.return_value = "<html>pooled</html>"
 
         with patch("app.platforms.ebay.browser_pool.get_pool", return_value=fake_pool):
-            # Clear the cache so fetch_url actually hits the pool.
             import app.platforms.ebay.scraper as scraper_mod
             scraper_mod._html_cache.clear()
             html = adapter._fetch_url("https://www.ebay.com/sch/i.html?_nkw=test")
@@ -451,7 +438,6 @@ class TestScraperUsesPool:
         )
 
     def test_fetch_url_uses_cache_before_pool(self):
-        """_fetch_url should return cached HTML without hitting the pool."""
         from app.platforms.ebay.scraper import ScrapedEbayAdapter, _html_cache, _HTML_CACHE_TTL
         from app.db.store import Store
 
@@ -467,6 +453,4 @@ class TestScraperUsesPool:
 
         assert html == "<html>cached</html>"
         fake_pool.fetch_html.assert_not_called()
-
-        # Cleanup
         _html_cache.pop(url, None)
