@@ -664,22 +664,22 @@ def _try_trading_api_enrichment(
     return enriched
 
 
-def _make_adapter(shared_store: Store, force: str = "auto"):
-    """Return the appropriate adapter.
+def _make_adapter(shared_store: Store, force: str = "auto", platform: str = "ebay"):
+    """Return the appropriate adapter for the given platform.
 
-    force: "auto" | "api" | "scraper"
+    force: "auto" | "api" | "scraper"  (ignored for non-eBay platforms)
       auto    — API if creds present, else scraper
       api     — Browse API (raises if no creds)
       scraper — Playwright scraper regardless of creds
 
     Adapters receive shared_store because they only read/write sellers and
     market_comps — never listings. Listings are returned and saved by the caller.
-
-    # Platform registry — add new adapters here as platforms are implemented.
-    # _make_adapter() currently handles eBay only. Phase 2 will add:
-    #   "mercari": MercariAdapter
-    #   "poshmark": PoshmarkAdapter
     """
+    if platform == "mercari":
+        from app.platforms.mercari import MercariAdapter
+        return MercariAdapter(shared_store)
+
+    # eBay
     client_id, client_secret, env = _ebay_creds()
     has_creds = bool(client_id and client_secret)
 
@@ -696,8 +696,10 @@ def _make_adapter(shared_store: Store, force: str = "auto"):
     return ScrapedEbayAdapter(shared_store)
 
 
-def _adapter_name(force: str = "auto") -> str:
+def _adapter_name(force: str = "auto", platform: str = "ebay") -> str:
     """Return the name of the adapter that would be used — without creating it."""
+    if platform != "ebay":
+        return platform
     client_id, client_secret, _ = _ebay_creds()
     if force == "scraper":
         return "scraper"
@@ -735,7 +737,7 @@ def search(
         q = ebay_item_id
 
     if not q.strip():
-        return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None, "adapter_used": _adapter_name(adapter)}
+        return {"listings": [], "trust_scores": {}, "sellers": {}, "market_price": None, "adapter_used": _adapter_name(adapter, platform=platform)}
 
     # Cap pages to the tier's maximum — free cloud users get 1 page, local gets unlimited.
     features = compute_features(session.tier)
@@ -743,9 +745,8 @@ def search(
 
     must_exclude_terms = _parse_terms(must_exclude)
 
-    # In Groups mode, expand OR groups into multiple targeted eBay queries to
-    # guarantee comprehensive result coverage — eBay relevance won't silently drop variants.
-    if must_include_mode == "groups" and must_include.strip():
+    # OR-group expansion is eBay-specific; other platforms use the base query directly.
+    if platform == "ebay" and must_include_mode == "groups" and must_include.strip():
         or_groups = parse_groups(must_include)
         ebay_queries = expand_queries(q, or_groups)
     else:
@@ -772,7 +773,7 @@ def search(
         category_id=category_id.strip() or None,
     )
 
-    adapter_used = _adapter_name(adapter)
+    adapter_used = _adapter_name(adapter, platform=platform)
 
     shared_db = session.shared_db
     user_db = session.user_db
@@ -832,11 +833,11 @@ def search(
             }
             seller_map = {
                 listing.seller_platform_id: dataclasses.asdict(
-                    shared_store.get_seller("ebay", listing.seller_platform_id)
+                    shared_store.get_seller(platform, listing.seller_platform_id)
                 )
                 for listing in listings
                 if listing.seller_platform_id
-                and shared_store.get_seller("ebay", listing.seller_platform_id)
+                and shared_store.get_seller(platform, listing.seller_platform_id)
             }
 
             _is_unauthed = session.user_id == "anonymous" or session.user_id.startswith("guest:")
@@ -890,11 +891,11 @@ def search(
 
     # Each thread creates its own Store — sqlite3 check_same_thread=True.
     def _run_search(ebay_query: str) -> list:
-        return _make_adapter(Store(shared_db), adapter).search(ebay_query, base_filters)
+        return _make_adapter(Store(shared_db), adapter, platform=platform).search(ebay_query, base_filters)
 
     def _run_comps() -> None:
         try:
-            _make_adapter(Store(shared_db), adapter).get_completed_sales(comp_query, pages)
+            _make_adapter(Store(shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
         except Exception:
             log.warning("comps: unhandled exception for %r", comp_query, exc_info=True)
 
@@ -943,46 +944,42 @@ def search(
 
         user_store.save_listings(listings)
 
-        # Derive category_history from accumulated listing data — free for API adapter
-        # (category_name comes from Browse API response), no-op for scraper listings (category_name=None).
-        # Reads listings from user_store, writes seller categories to shared_store.
+        # Derive category_history from accumulated listing data — eBay only
+        # (category_name comes from Browse API response; other platforms return None).
         seller_ids = list({l.seller_platform_id for l in listings if l.seller_platform_id})
-        n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
-        if n_cat:
-            log.info("Category history derived for %d sellers from listing data", n_cat)
+        if platform == "ebay":
+            n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
+            if n_cat:
+                log.info("Category history derived for %d sellers from listing data", n_cat)
 
         # Re-fetch to hydrate staging fields (times_seen, first_seen_at, id, price_at_first_seen)
         # that are only available from the DB after the upsert.
-        staged = user_store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
+        staged = user_store.get_listings_staged(platform, [l.platform_listing_id for l in listings])
         listings = [staged.get(l.platform_listing_id, l) for l in listings]
 
-        # Trading API enrichment: if the user has connected their eBay account, use
-        # Trading API GetUser to instantly fill account_age_days for sellers missing it.
-        # This is synchronous (~200ms per seller) but only runs for sellers that need
-        # enrichment — typically a small subset. Sellers resolved here are excluded from
-        # the slower BTF Playwright background pass.
-        _main_adapter = _make_adapter(shared_store, adapter)
-        sellers_needing_age = [
-            l.seller_platform_id for l in listings
-            if l.seller_platform_id
-            and shared_store.get_seller("ebay", l.seller_platform_id) is not None
-            and shared_store.get_seller("ebay", l.seller_platform_id).account_age_days is None
-        ]
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        sellers_needing_age = [s for s in sellers_needing_age if not (s in seen or seen.add(s))]  # type: ignore[func-returns-value]
-        trading_api_enriched = _try_trading_api_enrichment(
-            _main_adapter, sellers_needing_age, user_db
-        )
+        # Trading API enrichment and BTF scraping are eBay-specific.
+        _main_adapter = _make_adapter(shared_store, adapter, platform=platform)
+        trading_api_enriched: set[str] = set()
+        if platform == "ebay":
+            sellers_needing_age = [
+                l.seller_platform_id for l in listings
+                if l.seller_platform_id
+                and shared_store.get_seller("ebay", l.seller_platform_id) is not None
+                and shared_store.get_seller("ebay", l.seller_platform_id).account_age_days is None
+            ]
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            sellers_needing_age = [s for s in sellers_needing_age if not (s in seen or seen.add(s))]  # type: ignore[func-returns-value]
+            trading_api_enriched = _try_trading_api_enrichment(
+                _main_adapter, sellers_needing_age, user_db
+            )
 
-        # BTF enrichment: scrape /itm/ pages for sellers still missing account_age_days
-        # after the Trading API pass. Runs in the background so it doesn't delay the
-        # response. Live score updates are pushed to the pre-registered SSE queue.
-        _trigger_scraper_enrichment(
-            listings, shared_store, shared_db,
-            user_db=user_db, query=comp_query, session_id=session_id,
-            skip_seller_ids=trading_api_enriched,
-        )
+            # BTF enrichment: scrape /itm/ pages for sellers still missing account_age_days.
+            _trigger_scraper_enrichment(
+                listings, shared_store, shared_db,
+                user_db=user_db, query=comp_query, session_id=session_id,
+                skip_seller_ids=trading_api_enriched,
+            )
 
         scorer = TrustScorer(shared_store)
         trust_scores_list = scorer.score_batch(listings, q)
@@ -996,7 +993,7 @@ def search(
             _enqueue_vision_tasks(listings, trust_scores_list, session)
 
         query_hash = hashlib.md5(comp_query.encode()).hexdigest()
-        comp = shared_store.get_market_comp("ebay", query_hash)
+        comp = shared_store.get_market_comp(platform, query_hash)
         market_price = comp.median_price if comp else None
 
         # Store raw listings (as dicts) + market_price in cache.
@@ -1015,11 +1012,11 @@ def search(
         }
         seller_map = {
             listing.seller_platform_id: dataclasses.asdict(
-                shared_store.get_seller("ebay", listing.seller_platform_id)
+                shared_store.get_seller(platform, listing.seller_platform_id)
             )
             for listing in listings
             if listing.seller_platform_id
-            and shared_store.get_seller("ebay", listing.seller_platform_id)
+            and shared_store.get_seller(platform, listing.seller_platform_id)
         }
 
         # Build a preference reader for affiliate URL wrapping.
@@ -1123,7 +1120,7 @@ def search_async(
             "trust_scores": {},
             "sellers": {},
             "market_price": None,
-            "adapter_used": _adapter_name(adapter),
+            "adapter_used": _adapter_name(adapter, platform=platform),
             "affiliate_active": bool(os.environ.get("EBAY_AFFILIATE_CAMPAIGN_ID", "").strip()),
         })
         _update_queues[empty_id].put(None)
@@ -1152,7 +1149,8 @@ def search_async(
         q_norm = q  # captured from outer scope
         must_exclude_terms = _parse_terms(must_exclude)
 
-        if must_include_mode == "groups" and must_include.strip():
+        # OR-group expansion is eBay-specific; other platforms use the base query directly.
+        if platform == "ebay" and must_include_mode == "groups" and must_include.strip():
             or_groups = parse_groups(must_include)
             ebay_queries = expand_queries(q_norm, or_groups)
         else:
@@ -1174,7 +1172,7 @@ def search_async(
             category_id=category_id.strip() or None,
         )
 
-        adapter_used = _adapter_name(adapter)
+        adapter_used = _adapter_name(adapter, platform=platform)
         q_ref = _update_queues.get(session_id)
         if q_ref is None:
             return  # client disconnected before we even started
@@ -1281,11 +1279,11 @@ def search_async(
 
         try:
             def _run_search(ebay_query: str) -> list:
-                return _make_adapter(Store(_shared_db), adapter).search(ebay_query, base_filters)
+                return _make_adapter(Store(_shared_db), adapter, platform=platform).search(ebay_query, base_filters)
 
             def _run_comps() -> None:
                 try:
-                    _make_adapter(Store(_shared_db), adapter).get_completed_sales(comp_query, pages)
+                    _make_adapter(Store(_shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
                 except Exception:
                     log.warning("async comps: unhandled exception for %r", comp_query, exc_info=True)
 
@@ -1314,24 +1312,27 @@ def search_async(
             user_store.save_listings(listings)
 
             seller_ids = list({l.seller_platform_id for l in listings if l.seller_platform_id})
-            n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
-            if n_cat:
-                log.info("async_search: category history derived for %d sellers", n_cat)
+            if platform == "ebay":
+                n_cat = shared_store.refresh_seller_categories("ebay", seller_ids, listing_store=user_store)
+                if n_cat:
+                    log.info("async_search: category history derived for %d sellers", n_cat)
 
-            staged = user_store.get_listings_staged("ebay", [l.platform_listing_id for l in listings])
+            staged = user_store.get_listings_staged(platform, [l.platform_listing_id for l in listings])
             listings = [staged.get(l.platform_listing_id, l) for l in listings]
 
-            _main_adapter = _make_adapter(shared_store, adapter)
-            sellers_needing_age = [
-                l.seller_platform_id for l in listings
-                if l.seller_platform_id
-                and shared_store.get_seller("ebay", l.seller_platform_id) is not None
-                and shared_store.get_seller("ebay", l.seller_platform_id).account_age_days is None
-            ]
-            seen_set: set[str] = set()
-            sellers_needing_age = [s for s in sellers_needing_age if not (s in seen_set or seen_set.add(s))]  # type: ignore[func-returns-value]
+            _main_adapter = _make_adapter(shared_store, adapter, platform=platform)
+            sellers_needing_age: list[str] = []
+            if platform == "ebay":
+                sellers_needing_age = [
+                    l.seller_platform_id for l in listings
+                    if l.seller_platform_id
+                    and shared_store.get_seller("ebay", l.seller_platform_id) is not None
+                    and shared_store.get_seller("ebay", l.seller_platform_id).account_age_days is None
+                ]
+                seen_set: set[str] = set()
+                sellers_needing_age = [s for s in sellers_needing_age if not (s in seen_set or seen_set.add(s))]  # type: ignore[func-returns-value]
 
-            # Use a temporary CloudUser-like object for Trading API enrichment
+            # Use a temporary CloudUser-like object for Trading API enrichment (eBay only)
             from api.cloud_session import CloudUser as _CloudUser
             _session_stub = _CloudUser(
                 user_id=_user_id,
@@ -1339,9 +1340,11 @@ def search_async(
                 shared_db=_shared_db,
                 user_db=_user_db,
             )
-            trading_api_enriched = _try_trading_api_enrichment(
-                _main_adapter, sellers_needing_age, _user_db
-            )
+            trading_api_enriched: set[str] = set()
+            if platform == "ebay":
+                trading_api_enriched = _try_trading_api_enrichment(
+                    _main_adapter, sellers_needing_age, _user_db
+                )
 
             scorer = TrustScorer(shared_store)
             trust_scores_list = scorer.score_batch(listings, q_norm)
@@ -1353,7 +1356,7 @@ def search_async(
                 _enqueue_vision_tasks(listings, trust_scores_list, _session_stub)
 
             query_hash = _hashlib_local.md5(comp_query.encode()).hexdigest()
-            comp = shared_store.get_market_comp("ebay", query_hash)
+            comp = shared_store.get_market_comp(platform, query_hash)
             market_price = comp.median_price if comp else None
 
             # Store raw listings + market_price in cache (trust scores excluded).
@@ -1369,11 +1372,11 @@ def search_async(
             }
             seller_map = {
                 listing.seller_platform_id: dataclasses.asdict(
-                    shared_store.get_seller("ebay", listing.seller_platform_id)
+                    shared_store.get_seller(platform, listing.seller_platform_id)
                 )
                 for listing in listings
                 if listing.seller_platform_id
-                and shared_store.get_seller("ebay", listing.seller_platform_id)
+                and shared_store.get_seller(platform, listing.seller_platform_id)
             }
 
             _is_unauthed = _user_id == "anonymous" or _user_id.startswith("guest:")
@@ -1404,12 +1407,17 @@ def search_async(
                 "session_id": session_id,
             })
 
-            # Kick off background enrichment — it pushes "update" events and the sentinel.
-            _trigger_scraper_enrichment(
-                listings, shared_store, _shared_db,
-                user_db=_user_db, query=comp_query, session_id=session_id,
-                skip_seller_ids=trading_api_enriched,
-            )
+            # BTF background enrichment is eBay-specific.
+            if platform == "ebay":
+                _trigger_scraper_enrichment(
+                    listings, shared_store, _shared_db,
+                    user_db=_user_db, query=comp_query, session_id=session_id,
+                    skip_seller_ids=trading_api_enriched,
+                )
+            else:
+                # For non-eBay platforms, push the sentinel directly since there's no
+                # background enrichment pass.
+                _push(None)
 
         except _sqlite3.OperationalError as e:
             log.warning("async_search DB contention: %s", e)

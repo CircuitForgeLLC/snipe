@@ -9,7 +9,7 @@ from app.db.models import Listing, Seller
 
 # Single source of truth for platform validation.
 # Phase 2 will extend this set as new adapters are implemented.
-SUPPORTED_PLATFORMS: frozenset[str] = frozenset({"ebay"})
+SUPPORTED_PLATFORMS: frozenset[str] = frozenset({"ebay", "mercari"})
 
 
 @dataclass

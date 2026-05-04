@@ -6,6 +6,7 @@ long-lived Playwright browser instances with fresh contexts ready to serve.
 Key design:
 - Pool slots: ``(xvfb_proc, pw_instance, browser, context, display_num, last_used_ts)``
   One headed Chromium browser per slot — keeps the Kasada fingerprint clean.
+- Display numbering: :200-:399 (avoids host :0 and low-numbered kernel socket conflicts).
 - Thread safety: ``queue.Queue`` with blocking get (timeout=3s before fresh fallback).
 - Replenishment: after each use, the dirty context is closed and a new context is
   opened on the *same* browser, then returned to the queue.  Browser launch overhead
@@ -33,15 +34,17 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# Reuse the same display counter namespace as scraper.py to avoid collisions.
-# Pool uses :100-:199; scraper.py fallback uses :200-:299.
-_pool_display_counter = itertools.cycle(range(100, 200))
+# Display counter shared by pool warmup and _fetch_fresh fallback.
+# Range :200-:399 avoids low-numbered displays that may be pre-occupied by
+# the host X server or lingering kernel sockets from previous runs.
+_pool_display_counter = itertools.cycle(range(200, 400))
 
 _IDLE_TIMEOUT_SECS = 300  # 5 minutes
 _CLEANUP_INTERVAL_SECS = 60
 _QUEUE_TIMEOUT_SECS = 3.0
 
 _CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
+_XVFB_ARGS = ["-screen", "0", "1280x800x24", "-ac"]  # -ac: disable X auth (safe in isolated Docker)
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -74,7 +77,7 @@ def _launch_slot() -> "_PooledBrowser":
     env["DISPLAY"] = display
 
     xvfb = subprocess.Popen(
-        ["Xvfb", display, "-screen", "0", "1280x800x24"],
+        ["Xvfb", display] + _XVFB_ARGS,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -230,7 +233,13 @@ class BrowserPool:
     # Core fetch
     # ------------------------------------------------------------------
 
-    def fetch_html(self, url: str, delay: float = 1.0) -> str:
+    def fetch_html(
+        self,
+        url: str,
+        delay: float = 1.0,
+        wait_for_selector: Optional[str] = None,
+        wait_for_timeout_ms: int = 2000,
+    ) -> str:
         """Navigate to *url* and return the rendered HTML.
 
         Borrows a browser context from the pool (blocks up to 3s), uses it to
@@ -238,6 +247,15 @@ class BrowserPool:
 
         Falls back to a fully fresh browser if the pool is empty after the
         timeout or if Playwright is unavailable.
+
+        Args:
+            wait_for_selector: CSS/data-testid selector to wait for before capturing
+                HTML (e.g. ``"[data-testid='SearchResults']"``).  When set, the fixed
+                *wait_for_timeout_ms* sleep is skipped — the page is captured as soon
+                as the selector appears (or after 15s timeout, whichever comes first).
+            wait_for_timeout_ms: static post-navigation sleep in ms when
+                *wait_for_selector* is None.  Default 2000; set higher (e.g. 8000)
+                for sites with JS challenge pages (Cloudflare Turnstile).
         """
         time.sleep(delay)
 
@@ -249,7 +267,11 @@ class BrowserPool:
 
         if slot is not None:
             try:
-                html = self._fetch_with_slot(slot, url)
+                html = self._fetch_with_slot(
+                    slot, url,
+                    wait_for_selector=wait_for_selector,
+                    wait_for_timeout_ms=wait_for_timeout_ms,
+                )
                 # Replenish: close dirty context, open fresh one, return to queue.
                 try:
                     fresh_slot = _replenish_slot(slot)
@@ -264,7 +286,11 @@ class BrowserPool:
                 # Fall through to fresh browser below.
 
         # Fallback: fresh browser (same code as old scraper._fetch_url).
-        return self._fetch_fresh(url)
+        return self._fetch_fresh(
+            url,
+            wait_for_selector=wait_for_selector,
+            wait_for_timeout_ms=wait_for_timeout_ms,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -282,7 +308,13 @@ class BrowserPool:
             self._playwright_available = False
         return self._playwright_available
 
-    def _fetch_with_slot(self, slot: _PooledBrowser, url: str) -> str:
+    def _fetch_with_slot(
+        self,
+        slot: _PooledBrowser,
+        url: str,
+        wait_for_selector: Optional[str] = None,
+        wait_for_timeout_ms: int = 2000,
+    ) -> str:
         """Open a new page on *slot.ctx*, navigate to *url*, return HTML."""
         from playwright_stealth import Stealth
 
@@ -290,7 +322,13 @@ class BrowserPool:
         try:
             Stealth().apply_stealth_sync(page)
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_timeout(2000)
+            if wait_for_selector:
+                try:
+                    page.wait_for_selector(wait_for_selector, timeout=15_000)
+                except Exception:
+                    pass  # selector didn't appear; return whatever loaded
+            else:
+                page.wait_for_timeout(wait_for_timeout_ms)
             return page.content()
         finally:
             try:
@@ -298,7 +336,12 @@ class BrowserPool:
             except Exception:
                 pass
 
-    def _fetch_fresh(self, url: str) -> str:
+    def _fetch_fresh(
+        self,
+        url: str,
+        wait_for_selector: Optional[str] = None,
+        wait_for_timeout_ms: int = 2000,
+    ) -> str:
         """Launch a fully fresh browser, fetch *url*, close everything."""
         import subprocess as _subprocess
 
@@ -307,7 +350,7 @@ class BrowserPool:
             from playwright_stealth import Stealth
         except ImportError as exc:
             raise RuntimeError(
-                "Playwright not installed — cannot fetch eBay pages. "
+                "Playwright not installed — cannot fetch pages. "
                 "Install playwright and playwright-stealth in the Docker image."
             ) from exc
 
@@ -317,10 +360,11 @@ class BrowserPool:
         env["DISPLAY"] = display
 
         xvfb = _subprocess.Popen(
-            ["Xvfb", display, "-screen", "0", "1280x800x24"],
+            ["Xvfb", display] + _XVFB_ARGS,
             stdout=_subprocess.DEVNULL,
             stderr=_subprocess.DEVNULL,
         )
+        time.sleep(0.3)  # wait for Xvfb to bind the display socket before Chromium starts
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(
@@ -335,7 +379,13 @@ class BrowserPool:
                 page = ctx.new_page()
                 Stealth().apply_stealth_sync(page)
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                page.wait_for_timeout(2000)
+                if wait_for_selector:
+                    try:
+                        page.wait_for_selector(wait_for_selector, timeout=15_000)
+                    except Exception:
+                        pass  # selector didn't appear; return whatever loaded
+                else:
+                    page.wait_for_timeout(wait_for_timeout_ms)
                 html = page.content()
                 browser.close()
         finally:

@@ -698,7 +698,7 @@ const parsedMustIncludeGroups = computed(() =>
 
 const PLATFORMS: { value: string; label: string; available: boolean }[] = [
   { value: 'ebay',     label: 'eBay',     available: true },
-  { value: 'mercari',  label: 'Mercari',  available: false },
+  { value: 'mercari',  label: 'Mercari',  available: true },
   { value: 'poshmark', label: 'Poshmark', available: false },
 ]
 
