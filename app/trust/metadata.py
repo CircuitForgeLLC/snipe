@@ -44,7 +44,13 @@ class MetadataScorer:
         if count < 200: return 15
         return 20
 
-    def _feedback_ratio(self, ratio: float, count: int) -> int:
+    def _feedback_ratio(self, ratio: float, count: int) -> Optional[int]:
+        # ratio=0.0 with count>0 means the 12-month percentage wasn't on the page —
+        # eBay omits the ratio for returning/buyer-only sellers with no recent sales.
+        # Treat as missing rather than "literally 0% positive" (which eBay doesn't allow
+        # on active accounts — those get suspended long before reaching 0%).
+        if ratio == 0.0 and count > 0:
+            return None
         if ratio < 0.80 and count > 20: return 0
         if ratio < 0.90: return 5
         if ratio < 0.95: return 10

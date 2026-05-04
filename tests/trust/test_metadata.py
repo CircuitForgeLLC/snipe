@@ -43,3 +43,26 @@ def test_no_market_data_returns_none():
     scores = scorer.score(_seller(), market_median=None, listing_price=950.0)
     # None signals "data unavailable" — aggregator will set score_is_partial=True
     assert scores["price_vs_market"] is None
+
+
+def test_zero_ratio_with_nonzero_count_returns_none():
+    """ratio=0.0 with count>0 means eBay didn't show a 12-month percentage.
+    Must return None (missing data) not 0 (catastrophically bad)."""
+    scorer = MetadataScorer()
+    scores = scorer.score(
+        _seller(feedback_ratio=0.0, feedback_count=117),
+        market_median=None, listing_price=500.0,
+    )
+    assert scores["feedback_ratio"] is None
+
+
+def test_zero_ratio_with_zero_count_scores_low():
+    """feedback_ratio=0.0 with count=0 is a real 'no data at all' case, not missing."""
+    scorer = MetadataScorer()
+    scores = scorer.score(
+        _seller(feedback_ratio=0.0, feedback_count=0),
+        market_median=None, listing_price=500.0,
+    )
+    # count=0 means zero_feedback; ratio=0 with count=0 is the standard no-history path
+    # (not the "missing 12-month window" path)
+    assert scores["feedback_ratio"] == 5  # ratio < 0.90 → 5

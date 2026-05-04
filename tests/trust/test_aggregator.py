@@ -296,3 +296,37 @@ def test_non_retailer_does_not_suppress_duplicate_photo():
     )
     result = agg.aggregate(_ALL_20.copy(), photo_hash_duplicate=True, seller=seller)
     assert "duplicate_photo" in result.red_flags_json
+
+
+# ── #52: buyer-only / returning seller (ratio=0.0, count>0) ──────────────────
+
+def test_zero_ratio_with_count_gives_no_recent_seller_data_flag():
+    """Seller with 117 lifetime feedbacks (buyer-only) has ratio=0.0 parsed from page.
+    Must get no_recent_seller_data soft flag, NOT established_bad_actor."""
+    agg = Aggregator()
+    scores = {k: 10 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    buyer_only = Seller(
+        platform="ebay", platform_seller_id="u", username="jjcpryz",
+        account_age_days=1200, feedback_count=117, feedback_ratio=0.0,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(scores, photo_hash_duplicate=False, seller=buyer_only)
+    assert "no_recent_seller_data" in result.red_flags_json
+    assert "established_bad_actor" not in result.red_flags_json
+
+
+
+def test_established_bad_actor_still_fires_for_genuinely_bad_ratio():
+    """ratio=0.75 (not zero) with moderate count → established_bad_actor still fires."""
+    agg = Aggregator()
+    scores = {k: 10 for k in ["account_age", "feedback_count",
+                               "feedback_ratio", "price_vs_market", "category_history"]}
+    bad = Seller(
+        platform="ebay", platform_seller_id="u", username="u",
+        account_age_days=500, feedback_count=100, feedback_ratio=0.75,
+        category_history_json="{}",
+    )
+    result = agg.aggregate(scores, photo_hash_duplicate=False, seller=bad)
+    assert "established_bad_actor" in result.red_flags_json
+    assert "no_recent_seller_data" not in result.red_flags_json

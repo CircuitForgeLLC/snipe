@@ -126,7 +126,12 @@ class Aggregator:
         # Hard filters
         if seller and seller.account_age_days is not None and seller.account_age_days < HARD_FILTER_AGE_DAYS:
             red_flags.append("new_account")
-        if seller and seller.feedback_ratio < HARD_FILTER_BAD_RATIO_THRESHOLD:
+        if seller and seller.feedback_ratio == 0.0 and seller.feedback_count > 0:
+            # 12-month ratio missing from page — returning seller or buyer-only account.
+            # Score will be partial (metadata._feedback_ratio returns None).  Soft flag
+            # only: do NOT fire established_bad_actor on what is likely missing data.
+            red_flags.append("no_recent_seller_data")
+        elif seller and seller.feedback_ratio < HARD_FILTER_BAD_RATIO_THRESHOLD:
             if HARD_FILTER_BAD_RATIO_MIN_COUNT < seller.feedback_count <= HARD_FILTER_BAD_RATIO_MAX_COUNT:
                 # Moderate-volume account with consistently bad ratio → hard flag.
                 red_flags.append("established_bad_actor")
