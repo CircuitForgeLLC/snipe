@@ -213,24 +213,33 @@ docker compose -f compose.cloud.yml -p snipe-cloud build api  # after Python cha
 
 ## Roadmap
 
-### Near-term (eBay)
+### Intelligence features
 
 | Issue | Feature |
 |-------|---------|
-| [#1](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/1) | SSE/WebSocket live score push — enriched data appears without re-search |
-| [#2](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/2) | eBay OAuth (Connect eBay Account) for full trust score access via Trading API |
-| [#4](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/4) | Scammer database: community blocklist + batch eBay Trust & Safety reporting |
 | [#5](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/5) | UPC/product lookup → LLM-crafted search terms (paid tier) |
-| [#8](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/8) | "Triple Red" easter egg: CSS animation when all hard flags fire simultaneously |
-| [#11](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/11) | Vision-based photo condition assessment — moondream2 (local) / Claude vision (cloud, paid) |
 | [#12](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/12) | Background saved-search monitoring with configurable alerts |
+| [#21](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/21) | Vision classification pipeline — condition scoring, listing quality, fraud signals |
+| [#43](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/43) | Wire photo analysis task to cf-orch (VRAM-aware scheduling) |
+| [#51](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/51) | Reranker: semantic filter before trust scoring |
+| [#52](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/52) | Trust score fix: exclude buyer-only feedback from `feedback_count` |
+| [#41](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/41) | Additional theme variants — solarized, high-contrast, colorblind-safe |
+
+### Platform expansion
+
+| Issue | Feature |
+|-------|---------|
+| ✅ shipped | Mercari US — search + partial trust scoring |
+| [#53](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/53) | BrowserPool thread-safety — eliminate per-request cold-start (~10s) |
+| [#10](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/10) | CT Bids, HiBid, AuctionZip, Invaluable, GovPlanet, Bidsquare, Proxibid |
+| [#46](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/46) | Broadcast trust score verdicts to Fediverse communities via ActivityPub |
 
 ### Cloud / infrastructure
 
 | Issue | Feature |
 |-------|---------|
-| [#6](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/6) | Shared seller/scammer/comps DB across cloud users (public data, no re-scraping) |
 | [#7](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/7) | Shared image hash DB — requires explicit opt-in consent (CF privacy-by-architecture) |
+| [#45](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/45) | Migrate shared seller/comps DB from SQLite to Postgres |
 
 ### Auction sniping engine
 
@@ -239,13 +248,22 @@ docker compose -f compose.cloud.yml -p snipe-cloud build api  # after Python cha
 | [#9](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/9) | Bid scheduling + snipe execution (NTP-synchronized, soft-close handling, human approval gate) |
 | [#13](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/13) | Post-win workflow: payment routing, shipping coordination, provenance documentation |
 
-### Multi-platform expansion
+### Already shipped
 
 | Issue | Feature |
 |-------|---------|
-| ✅ shipped | Mercari US — search + partial trust scoring |
-| [#10](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/10) | CT Bids, HiBid, AuctionZip, Invaluable, GovPlanet, Bidsquare, Proxibid |
-| [#53](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/53) | BrowserPool thread-safety — eliminate per-request cold-start (~10s) |
+| [#1](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/1) | SSE live score push — enriched data appears without re-search |
+| [#2](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/2) | eBay OAuth for full trust score access via Trading API |
+| [#4](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/4) | Community blocklist + batch eBay Trust & Safety reporting |
+| [#6](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/6) | Shared seller/scammer/comps DB across cloud users |
+| [#8](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/8) | "Triple Red" easter egg |
+| [#11](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/11) | Vision-based photo condition assessment — moondream2 / Claude vision |
+| [#27](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/27) | MCP server for Snipe search and scoring |
+| [#29](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/29) | LLM query builder — describe what to find, AI builds the search |
+| [#47](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/47) | Browser pool — pre-warm Chromium to cut scrape cold-start |
+| [#48](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/48) | Search result caching — skip redundant scrapes for repeated queries |
+| [#49](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/49) | Async search endpoint — return job ID immediately, scrape in background |
+| [#50](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/50) | Currency preference — display prices in user's preferred currency |
 
 ---
 
