@@ -153,7 +153,10 @@ class TestFetchHtmlPoolHit:
             html = pool.fetch_html("https://www.ebay.com/sch/i.html?_nkw=test", delay=0)
 
         assert html == "<html>ok</html>"
-        mock_fetch.assert_called_once_with(slot, "https://www.ebay.com/sch/i.html?_nkw=test")
+        mock_fetch.assert_called_once_with(
+            slot, "https://www.ebay.com/sch/i.html?_nkw=test",
+            wait_for_selector=None, wait_for_timeout_ms=2000,
+        )
         mock_replenish.assert_called_once_with(slot)
         # Fresh slot returned to queue
         assert pool._q.get_nowait() is fresh_slot
@@ -197,7 +200,10 @@ class TestFetchHtmlFallback:
             html = pool.fetch_html("https://www.ebay.com/sch/i.html?_nkw=widget", delay=0)
 
         assert html == "<html>fresh</html>"
-        mock_fresh.assert_called_once_with("https://www.ebay.com/sch/i.html?_nkw=widget")
+        mock_fresh.assert_called_once_with(
+            "https://www.ebay.com/sch/i.html?_nkw=widget",
+            wait_for_selector=None, wait_for_timeout_ms=2000,
+        )
 
     def test_falls_back_when_pooled_fetch_raises(self):
         """If _fetch_with_slot raises, the slot is closed and _fetch_fresh is used."""

@@ -93,6 +93,74 @@
       </div>
     </section>
 
+    <!-- eBay Account Connection — paid+ only -->
+    <section v-if="ebay.oauth_available && session.isLoggedIn" class="settings-section">
+      <h2 class="settings-section-title">eBay Account</h2>
+
+      <!-- Connected state -->
+      <div v-if="ebay.connected" class="ebay-connected">
+        <div class="ebay-status-row">
+          <span class="ebay-status-dot ebay-status-dot--on" aria-hidden="true" />
+          <span class="settings-toggle-label">Connected</span>
+        </div>
+        <p class="settings-toggle-desc">
+          Snipe uses your eBay account to fetch seller registration dates instantly
+          via the Trading API, without Playwright scraping. This means faster, more
+          accurate trust scores on every search.
+          <span v-if="ebay.access_token_expired" class="ebay-warn">
+            Your access token has expired — reconnect to restore instant enrichment.
+          </span>
+        </p>
+        <div class="ebay-action-row">
+          <button
+            v-if="ebay.access_token_expired"
+            class="ebay-btn ebay-btn--primary"
+            :disabled="ebay.connecting"
+            @click="startConnect"
+          >
+            Reconnect eBay account
+          </button>
+          <button
+            class="ebay-btn ebay-btn--danger"
+            :disabled="ebay.disconnecting"
+            @click="disconnect"
+          >
+            {{ ebay.disconnecting ? 'Disconnecting…' : 'Disconnect' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Not connected — paid tier -->
+      <div v-else-if="session.isPaid || session.isPremium" class="ebay-disconnected">
+        <p class="settings-toggle-desc">
+          Connect your eBay account to enable instant seller registration date lookup
+          via the Trading API. Without it, Snipe falls back to slower Playwright
+          scraping (or Shopping API rate-limited calls) to determine account age.
+        </p>
+        <button
+          class="ebay-btn ebay-btn--primary"
+          :disabled="ebay.connecting"
+          @click="startConnect"
+        >
+          {{ ebay.connecting ? 'Redirecting to eBay…' : 'Connect eBay account' }}
+        </button>
+      </div>
+
+      <!-- Not connected — free tier upsell -->
+      <div v-else class="ebay-disconnected">
+        <p class="settings-toggle-desc">
+          Connect your eBay account for instant seller trust scoring without scraping.
+          Available on Paid tier and above.
+        </p>
+        <a class="ebay-btn ebay-btn--upsell" href="/pricing" rel="noopener">
+          Upgrade to Paid
+        </a>
+      </div>
+
+      <p v-if="ebay.error" class="settings-error" role="alert">{{ ebay.error }}</p>
+      <p v-if="ebay.success" class="settings-success" role="status">{{ ebay.success }}</p>
+    </section>
+
     <!-- Affiliate Links — only shown to signed-in cloud users -->
     <section v-if="session.isLoggedIn" class="settings-section">
       <h2 class="settings-section-title">Affiliate Links</h2>
@@ -174,13 +242,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, reactive, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useTrustSignalPref } from '../composables/useTrustSignalPref'
 import { useTheme } from '../composables/useTheme'
 import { useSessionStore } from '../stores/session'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLLMQueryBuilder } from '../composables/useLLMQueryBuilder'
 
+const route = useRoute()
+const router = useRouter()
 const { enabled: trustSignalEnabled, setEnabled } = useTrustSignalPref()
 const theme = useTheme()
 const themeOptions: { value: 'system' | 'dark' | 'light'; label: string }[] = [
@@ -212,6 +283,90 @@ watch(() => prefs.affiliateByokId, (val) => { byokInput.value = val })
 function saveByokId() {
   prefs.setAffiliateByokId(byokInput.value)
 }
+
+// ── eBay Account Connection ──────────────────────────────────────────────────
+
+const ebay = reactive({
+  oauth_available: false,
+  connected: false,
+  access_token_expired: false,
+  scopes: [] as string[],
+  connecting: false,
+  disconnecting: false,
+  error: '',
+  success: '',
+})
+
+async function fetchEbayStatus() {
+  try {
+    const res = await fetch('/api/ebay/status')
+    if (!res.ok) return
+    const data = await res.json()
+    ebay.oauth_available = data.oauth_available ?? false
+    ebay.connected = data.connected ?? false
+    ebay.access_token_expired = data.access_token_expired ?? false
+    ebay.scopes = data.scopes ?? []
+  } catch {
+    // silently ignore — section stays hidden if fetch fails
+  }
+}
+
+async function startConnect() {
+  ebay.connecting = true
+  ebay.error = ''
+  try {
+    const res = await fetch('/api/ebay/connect')
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      ebay.error = body.detail ?? 'eBay connection unavailable.'
+      return
+    }
+    const { auth_url } = await res.json()
+    window.location.href = auth_url
+  } catch {
+    ebay.error = 'Could not reach the server. Try again.'
+    ebay.connecting = false
+  }
+}
+
+async function disconnect() {
+  ebay.disconnecting = true
+  ebay.error = ''
+  ebay.success = ''
+  try {
+    const res = await fetch('/api/ebay/disconnect', { method: 'DELETE' })
+    if (res.ok || res.status === 204) {
+      ebay.connected = false
+      ebay.access_token_expired = false
+      ebay.scopes = []
+      ebay.success = 'eBay account disconnected.'
+    } else {
+      ebay.error = 'Disconnect failed. Try again.'
+    }
+  } catch {
+    ebay.error = 'Could not reach the server. Try again.'
+  } finally {
+    ebay.disconnecting = false
+  }
+}
+
+onMounted(async () => {
+  await fetchEbayStatus()
+
+  // Handle OAuth callback redirect params: ?ebay_connected=1 or ?ebay_error=access_denied
+  const connected = route.query.ebay_connected
+  const oauthError = route.query.ebay_error
+  if (connected) {
+    ebay.success = 'eBay account connected! Trust scores will now use the Trading API.'
+    await fetchEbayStatus()
+    router.replace({ query: { ...route.query, ebay_connected: undefined } })
+  } else if (oauthError) {
+    ebay.error = oauthError === 'access_denied'
+      ? 'eBay authorization was cancelled.'
+      : `eBay OAuth error: ${oauthError}`
+    router.replace({ query: { ...route.query, ebay_error: undefined } })
+  }
+})
 </script>
 
 <style scoped>
@@ -373,7 +528,7 @@ function saveByokId() {
   outline-offset: 2px;
 }
 
-/* ---- Error feedback ---- */
+/* ---- Error / success feedback ---- */
 .settings-error {
   font-size: 0.8125rem;
   color: var(--color-danger, #f85149);
@@ -396,6 +551,100 @@ function saveByokId() {
 
 .settings-select:focus {
   border-color: var(--app-primary);
+}
+
+.settings-success {
+  font-size: 0.8125rem;
+  color: var(--color-success, #3fb950);
+  margin: 0;
+}
+
+/* ---- eBay Account section ---- */
+.ebay-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ebay-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-border);
+}
+
+.ebay-status-dot--on {
+  background: var(--color-success, #3fb950);
+}
+
+.ebay-connected,
+.ebay-disconnected {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ebay-warn {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-warning, #d29922);
+}
+
+.ebay-action-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.ebay-btn {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ebay-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ebay-btn--primary {
+  background: var(--app-primary);
+  color: var(--color-text-inverse, #fff);
+}
+
+.ebay-btn--primary:hover:not(:disabled) { opacity: 0.85; }
+
+.ebay-btn--danger {
+  background: transparent;
+  color: var(--color-danger, #f85149);
+  border: 1px solid var(--color-danger, #f85149);
+}
+
+.ebay-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger, #f85149) 12%, transparent);
+}
+
+.ebay-btn--upsell {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.ebay-btn--upsell:hover { opacity: 0.85; }
+
+.ebay-btn:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
 }
 
 .theme-btn-group {

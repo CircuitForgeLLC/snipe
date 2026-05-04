@@ -8,7 +8,7 @@ from typing import Optional
 
 from circuitforge_core.db import get_connection, run_migrations
 
-from .models import Listing, MarketComp, SavedSearch, ScammerEntry, Seller, TrustScore
+from .models import Listing, MarketComp, SavedSearch, ScammerEntry, Seller, TrustScore, WatchAlert
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -310,14 +310,65 @@ class Store:
 
     def list_saved_searches(self) -> list[SavedSearch]:
         rows = self._conn.execute(
-            "SELECT name, query, platform, filters_json, id, created_at, last_run_at "
+            "SELECT name, query, platform, filters_json, id, created_at, last_run_at, "
+            "monitor_enabled, poll_interval_min, min_trust_score, last_checked_at "
             "FROM saved_searches ORDER BY created_at DESC"
         ).fetchall()
         return [
-            SavedSearch(name=r[0], query=r[1], platform=r[2], filters_json=r[3],
-                        id=r[4], created_at=r[5], last_run_at=r[6])
+            SavedSearch(
+                name=r[0], query=r[1], platform=r[2], filters_json=r[3],
+                id=r[4], created_at=r[5], last_run_at=r[6],
+                monitor_enabled=bool(r[7]), poll_interval_min=r[8],
+                min_trust_score=r[9], last_checked_at=r[10],
+            )
             for r in rows
         ]
+
+    def update_monitor_settings(
+        self,
+        saved_id: int,
+        *,
+        monitor_enabled: bool,
+        poll_interval_min: int,
+        min_trust_score: int,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE saved_searches "
+            "SET monitor_enabled=?, poll_interval_min=?, min_trust_score=? "
+            "WHERE id=?",
+            (int(monitor_enabled), poll_interval_min, min_trust_score, saved_id),
+        )
+        self._conn.commit()
+
+    def list_monitored_searches(self) -> list[SavedSearch]:
+        """Return all saved searches with monitoring enabled (used by background poller)."""
+        rows = self._conn.execute(
+            "SELECT name, query, platform, filters_json, id, created_at, last_run_at, "
+            "monitor_enabled, poll_interval_min, min_trust_score, last_checked_at "
+            "FROM saved_searches WHERE monitor_enabled=1"
+        ).fetchall()
+        return [
+            SavedSearch(
+                name=r[0], query=r[1], platform=r[2], filters_json=r[3],
+                id=r[4], created_at=r[5], last_run_at=r[6],
+                monitor_enabled=True, poll_interval_min=r[8],
+                min_trust_score=r[9], last_checked_at=r[10],
+            )
+            for r in rows
+        ]
+
+    def mark_search_checked(self, saved_id: int) -> None:
+        self._conn.execute(
+            "UPDATE saved_searches SET last_checked_at=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), saved_id),
+        )
+        self._conn.commit()
+
+    def count_active_monitors(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM saved_searches WHERE monitor_enabled=1"
+        ).fetchone()
+        return row[0] if row else 0
 
     def delete_saved_search(self, saved_id: int) -> None:
         self._conn.execute("DELETE FROM saved_searches WHERE id=?", (saved_id,))
@@ -327,6 +378,112 @@ class Store:
         self._conn.execute(
             "UPDATE saved_searches SET last_run_at=? WHERE id=?",
             (datetime.now(timezone.utc).isoformat(), saved_id),
+        )
+        self._conn.commit()
+
+    # --- WatchAlerts ---
+
+    def upsert_alert(self, alert: WatchAlert) -> tuple[int, bool]:
+        """Insert alert if not already present. Returns (id, is_new)."""
+        existing = self._conn.execute(
+            "SELECT id FROM watch_alerts WHERE saved_search_id=? AND platform_listing_id=?",
+            (alert.saved_search_id, alert.platform_listing_id),
+        ).fetchone()
+        if existing:
+            return existing[0], False
+        cur = self._conn.execute(
+            "INSERT INTO watch_alerts "
+            "(saved_search_id, platform_listing_id, title, price, currency, trust_score, url) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (alert.saved_search_id, alert.platform_listing_id, alert.title,
+             alert.price, alert.currency, alert.trust_score, alert.url),
+        )
+        self._conn.commit()
+        return cur.lastrowid, True
+
+    def list_alerts(self, *, include_dismissed: bool = False) -> list[WatchAlert]:
+        where = "" if include_dismissed else "WHERE dismissed_at IS NULL"
+        rows = self._conn.execute(
+            f"SELECT id, saved_search_id, platform_listing_id, title, price, currency, "
+            f"trust_score, url, first_alerted_at, dismissed_at "
+            f"FROM watch_alerts {where} ORDER BY first_alerted_at DESC"
+        ).fetchall()
+        return [
+            WatchAlert(
+                id=r[0], saved_search_id=r[1], platform_listing_id=r[2],
+                title=r[3], price=r[4], currency=r[5], trust_score=r[6],
+                url=r[7], first_alerted_at=r[8], dismissed_at=r[9],
+            )
+            for r in rows
+        ]
+
+    def count_undismissed_alerts(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM watch_alerts WHERE dismissed_at IS NULL"
+        ).fetchone()
+        return row[0] if row else 0
+
+    def dismiss_alert(self, alert_id: int) -> None:
+        self._conn.execute(
+            "UPDATE watch_alerts SET dismissed_at=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), alert_id),
+        )
+        self._conn.commit()
+
+    def dismiss_all_alerts(self) -> int:
+        """Dismiss all undismissed alerts. Returns count dismissed."""
+        cur = self._conn.execute(
+            "UPDATE watch_alerts SET dismissed_at=? WHERE dismissed_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    # --- ActiveMonitors (sched_db / shared_db) ---
+
+    def upsert_active_monitor(
+        self,
+        user_db_path: str,
+        saved_search_id: int,
+        poll_interval_min: int,
+    ) -> None:
+        """Register or update a monitor in the cross-user registry (sched_db)."""
+        self._conn.execute(
+            "INSERT INTO active_monitors (user_db_path, saved_search_id, poll_interval_min) "
+            "VALUES (?,?,?) "
+            "ON CONFLICT(user_db_path, saved_search_id) DO UPDATE SET "
+            "  poll_interval_min=excluded.poll_interval_min",
+            (user_db_path, saved_search_id, poll_interval_min),
+        )
+        self._conn.commit()
+
+    def remove_active_monitor(self, user_db_path: str, saved_search_id: int) -> None:
+        self._conn.execute(
+            "DELETE FROM active_monitors WHERE user_db_path=? AND saved_search_id=?",
+            (user_db_path, saved_search_id),
+        )
+        self._conn.commit()
+
+    def list_due_active_monitors(self) -> list[tuple[str, int, int]]:
+        """Return (user_db_path, saved_search_id, poll_interval_min) for monitors that are due.
+
+        Due = never checked OR last_checked_at is old enough given poll_interval_min.
+        Uses SQLite's strftime('%s') for epoch arithmetic without Python datetime overhead.
+        """
+        rows = self._conn.execute(
+            "SELECT user_db_path, saved_search_id, poll_interval_min "
+            "FROM active_monitors "
+            "WHERE last_checked_at IS NULL "
+            "   OR (strftime('%s','now') - strftime('%s', last_checked_at)) "
+            "       >= poll_interval_min * 60"
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
+    def mark_active_monitor_checked(self, user_db_path: str, saved_search_id: int) -> None:
+        self._conn.execute(
+            "UPDATE active_monitors SET last_checked_at=? "
+            "WHERE user_db_path=? AND saved_search_id=?",
+            (datetime.now(timezone.utc).isoformat(), user_db_path, saved_search_id),
         )
         self._conn.commit()
 

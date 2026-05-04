@@ -81,6 +81,26 @@ class SavedSearch:
     id: Optional[int] = None
     created_at: Optional[str] = None
     last_run_at: Optional[str] = None
+    # Monitor settings (migration 014)
+    monitor_enabled: bool = False
+    poll_interval_min: int = 60
+    min_trust_score: int = 60
+    last_checked_at: Optional[str] = None
+
+
+@dataclass
+class WatchAlert:
+    """A new listing surfaced by the background monitor for a saved search."""
+    saved_search_id: int
+    platform_listing_id: str
+    title: str
+    price: float
+    trust_score: int
+    currency: str = "USD"
+    url: Optional[str] = None
+    id: Optional[int] = None
+    first_alerted_at: Optional[str] = None
+    dismissed_at: Optional[str] = None
 
 
 @dataclass

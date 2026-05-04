@@ -1,8 +1,9 @@
-"""eBay Browse API adapter."""
+"""eBay Browse + Trading API adapter."""
 from __future__ import annotations
 
 import hashlib
 import logging
+import xml.etree.ElementTree as ET
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -209,6 +210,70 @@ class EbayAdapter(PlatformAdapter):
                         log.debug("Shopping API: %s registered %d days ago", username, age_days)
             except Exception as e:
                 log.debug("Shopping API enrich failed for %s: %s", username, e)
+
+    # ── Trading API GetUser (requires user OAuth token) ───────────────────────
+
+    _TRADING_API_URL = "https://api.ebay.com/ws/api.dll"
+    _TRADING_API_COMPATIBILITY = "1283"
+
+    def enrich_seller_trading_api(self, username: str, user_access_token: str) -> bool:
+        """Enrich a seller's account_age_days using Trading API GetUser.
+
+        Uses the connected user's OAuth access token (Authorization Code flow),
+        which bypasses Shopping API rate limits and works even when the Shopping
+        API GetUserProfile call is throttled.
+
+        Unlike BTF scraping, this is a clean API call (~200ms, no Playwright).
+        Called from the search endpoint when the requesting user has connected
+        their eBay account.
+
+        Returns True if enrichment succeeded, False on any failure.
+        """
+        xml_body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+            f'<UserID>{username}</UserID>'
+            '</GetUserRequest>'
+        )
+        try:
+            resp = requests.post(
+                self._TRADING_API_URL,
+                headers={
+                    "X-EBAY-API-CALL-NAME": "GetUser",
+                    "X-EBAY-API-SITEID": "0",
+                    "X-EBAY-API-COMPATIBILITY-LEVEL": self._TRADING_API_COMPATIBILITY,
+                    "X-EBAY-API-IAF-TOKEN": f"Bearer {user_access_token}",
+                    "Content-Type": "text/xml",
+                },
+                data=xml_body.encode("utf-8"),
+                timeout=10,
+            )
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            ns = {"e": "urn:ebay:apis:eBLBaseComponents"}
+
+            ack = root.findtext("e:Ack", namespaces=ns)
+            if ack not in ("Success", "Warning"):
+                errors = [e.findtext("e:LongMessage", namespaces=ns, default="")
+                          for e in root.findall("e:Errors", namespaces=ns)]
+                log.debug("Trading API GetUser failed for %s: %s", username, errors)
+                return False
+
+            reg_date = root.findtext("e:User/e:RegistrationDate", namespaces=ns)
+            if not reg_date:
+                return False
+
+            dt = datetime.fromisoformat(reg_date.replace("Z", "+00:00"))
+            age_days = (datetime.now(timezone.utc) - dt).days
+            seller = self._store.get_seller("ebay", username)
+            if seller:
+                self._store.save_seller(replace(seller, account_age_days=age_days))
+                log.debug("Trading API GetUser: %s registered %d days ago", username, age_days)
+            return True
+
+        except Exception as exc:
+            log.debug("Trading API GetUser failed for %s: %s", username, exc)
+            return False
 
     def get_seller(self, seller_platform_id: str) -> Optional[Seller]:
         cached = self._store.get_seller("ebay", seller_platform_id)

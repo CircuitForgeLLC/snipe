@@ -1,7 +1,7 @@
 <template>
   <!-- Desktop: persistent sidebar (≥1024px) -->
   <!-- Mobile: bottom tab bar (<1024px) -->
-  <nav class="app-sidebar" role="navigation" aria-label="Main navigation">
+  <nav class="app-sidebar" role="navigation" aria-label="Sidebar">
     <!-- Brand -->
     <div class="sidebar__brand">
       <RouterLink to="/" class="sidebar__logo">
@@ -32,17 +32,20 @@
       </button>
     </div>
 
-    <!-- Settings at bottom -->
+    <!-- Settings + alert bell at bottom -->
     <div class="sidebar__footer">
-      <RouterLink to="/settings" class="sidebar__link sidebar__link--footer" active-class="sidebar__link--active">
-        <Cog6ToothIcon class="sidebar__icon" aria-hidden="true" />
-        <span class="sidebar__label">Settings</span>
-      </RouterLink>
+      <div class="sidebar__footer-row">
+        <RouterLink to="/settings" class="sidebar__link sidebar__link--footer" active-class="sidebar__link--active">
+          <Cog6ToothIcon class="sidebar__icon" aria-hidden="true" />
+          <span class="sidebar__label">Settings</span>
+        </RouterLink>
+        <AlertBell v-if="session.isLoggedIn || session.tier === 'local'" class="sidebar__bell" />
+      </div>
     </div>
   </nav>
 
   <!-- Mobile bottom tab bar -->
-  <nav class="app-tabbar" role="navigation" aria-label="Main navigation">
+  <nav class="app-tabbar" role="navigation" aria-label="Tab bar">
     <ul class="tabbar__links" role="list">
       <li v-for="link in mobileLinks" :key="link.to">
         <RouterLink
@@ -69,8 +72,11 @@ import {
   ShieldExclamationIcon,
 } from '@heroicons/vue/24/outline'
 import { useSnipeMode } from '../composables/useSnipeMode'
+import { useSessionStore } from '../stores/session'
+import AlertBell from './AlertBell.vue'
 
 const { active: isSnipeMode, deactivate } = useSnipeMode()
+const session = useSessionStore()
 
 const navLinks = computed(() => [
   { to: '/',          icon: MagnifyingGlassIcon,    label: 'Search' },
@@ -81,7 +87,7 @@ const navLinks = computed(() => [
 const mobileLinks = [
   { to: '/',          icon: MagnifyingGlassIcon,    label: 'Search' },
   { to: '/saved',     icon: BookmarkIcon,            label: 'Saved' },
-  { to: '/blocklist', icon: ShieldExclamationIcon,   label: 'Block' },
+  { to: '/blocklist', icon: ShieldExclamationIcon,   label: 'Blocklist' },
   { to: '/settings',  icon: Cog6ToothIcon,           label: 'Settings' },
 ]
 </script>
@@ -200,6 +206,20 @@ const mobileLinks = [
 .sidebar__footer {
   padding: var(--space-3) var(--space-3) 0;
   border-top: 1px solid var(--color-border-light);
+}
+
+.sidebar__footer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sidebar__footer-row .sidebar__link {
+  flex: 1;
+}
+
+.sidebar__bell {
+  flex-shrink: 0;
 }
 
 /* ── Mobile tab bar (<1024px) ───────────────────────── */
