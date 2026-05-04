@@ -2,7 +2,7 @@
 
 > *Part of the Circuit Forge LLC "AI for the tasks you hate most" suite.*
 
-**Status:** Active — eBay listing intelligence MVP complete (search, trust scoring, affiliate links, feedback FAB, vision task scheduling). Auction sniping engine and multi-platform support are next.
+**Status:** Active — eBay listing intelligence MVP complete; Mercari search + trust scoring live. Auction sniping engine and additional platforms are next.
 
 **[Documentation](https://docs.circuitforge.tech/snipe/)** · [circuitforge.tech](https://circuitforge.tech)
 
@@ -79,7 +79,18 @@ The name is the origin of the word "sniping" — common snipes are notoriously e
 
 ---
 
-## Implemented: eBay Listing Intelligence
+## Implemented: Listing Intelligence
+
+### Supported platforms
+
+| Platform | Search | Trust scoring | Completed-sales comps |
+|----------|--------|---------------|-----------------------|
+| **eBay** | ✅ Browse API + Playwright fallback | ✅ All 5 signals | ✅ Marketplace Insights + Browse fallback |
+| **Mercari** | ✅ Playwright scraper | ✅ Partial (3/5 signals) | ⏳ Phase 3 |
+
+Switch between platforms via the tab picker in the search UI. All platforms share the same Playwright + Xvfb scraping stack (Cloudflare/Kasada-safe headed Chromium).
+
+### eBay Listing Intelligence
 
 ### Search & filtering
 - Full-text eBay search via Browse API (with Playwright scraper fallback when no API credentials configured)
@@ -153,6 +164,24 @@ Completed sales fetched via eBay Marketplace Insights API (with Browse API fallb
 | Playwright scraper (`scraper`) | No credentials / forced | All signals except account age (async BTF enrichment) |
 | `auto` (default) | — | API if credentials present, scraper otherwise |
 
+### Mercari Listing Intelligence
+
+Search Mercari US via headed Chromium + playwright-stealth, bypassing Cloudflare Turnstile. Uses the same `BrowserPool` as the eBay scraper.
+
+**Trust signal coverage:**
+
+| Signal | Source | Available |
+|--------|--------|-----------|
+| `feedback_count` | `NumSales` on listing page | ✅ |
+| `feedback_ratio` | `ReviewStarsWrapper[data-stars]` ÷ 5 | ✅ |
+| `price_vs_market` | Computed from comps (Phase 3) | ⏳ |
+| `account_age_days` | Seller profile page (not yet fetched) | ❌ |
+| `category_history` | Not exposed in Mercari HTML | ❌ |
+
+All Mercari scores are marked **partial** (`score_is_partial=True`) because account age and category history are unavailable. The trust scorer handles partial scores correctly — missing signals don't penalise the seller.
+
+**Design note:** `seller_platform_id` stores the Mercari `product_id` (e.g. `m86032668393`) rather than the seller username, because seller identity isn't available from search results HTML. `get_seller()` resolves the product ID by fetching the individual listing page.
+
 ---
 
 ## Stack
@@ -214,13 +243,16 @@ docker compose -f compose.cloud.yml -p snipe-cloud build api  # after Python cha
 
 | Issue | Feature |
 |-------|---------|
+| ✅ shipped | Mercari US — search + partial trust scoring |
 | [#10](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/10) | CT Bids, HiBid, AuctionZip, Invaluable, GovPlanet, Bidsquare, Proxibid |
+| [#53](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/issues/53) | BrowserPool thread-safety — eliminate per-request cold-start (~10s) |
 
 ---
 
 ## Primary platforms (full vision)
 
 - **eBay** — general + collectibles *(search + trust scoring: implemented)*
+- **Mercari** — US resale marketplace *(search + partial trust scoring: implemented; comps Phase 3)*
 - **CT Bids** — Connecticut state surplus and municipal auctions
 - **GovPlanet / IronPlanet** — government surplus equipment
 - **AuctionZip** — antique auction house aggregator (1,000+ houses)
@@ -263,9 +295,9 @@ Online auctions are frustrating because:
 ## Tech notes
 
 - Shared `circuitforge-core` scaffold (DB, LLM router, tier system, config)
-- Platform adapters: currently eBay only; AuctionZip, Invaluable, HiBid, CT Bids planned (Playwright + API where available)
+- Platform adapters: eBay (Browse API + scraper) and Mercari (scraper); AuctionZip, Invaluable, HiBid, CT Bids planned (Playwright + API where available)
 - Bid execution: Playwright automation with precise timing (NTP-synchronized)
 - Soft-close detection: platform-specific rules engine
 - Comparable sales: eBay completed listings via Marketplace Insights API + Browse API fallback
 - Vision module: condition assessment from listing photos — moondream2 / Claude vision (paid tier stub in `app/trust/photo.py`)
-- **Kasada bypass**: headed Chromium via Xvfb; all scraping uses this path — headless and `requests`-based approaches are blocked by eBay
+- **Kasada/Cloudflare bypass**: headed Chromium via Xvfb with playwright-stealth; all scraping uses this path — headless and `requests`-based approaches are blocked by eBay and Mercari. Xvfb started with `-ac` (no X11 auth required in Docker), display range `:200+` to avoid host socket conflicts.
