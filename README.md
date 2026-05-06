@@ -16,7 +16,12 @@
 
 ---
 
-![Snipe hero screenshot — search results with trust score badges, STEAL price flags, and red flag indicators](docs/screenshots/hero.png)
+<table>
+<tr>
+<td><img src="docs/screenshots/hero.png" alt="Snipe search page with filter panel and feature overview"/></td>
+<td><img src="docs/screenshots/results.png" alt="Search results — trust score badges, STEAL price flags, seller feedback, and market price comparison"/></td>
+</tr>
+</table>
 
 ---
 
