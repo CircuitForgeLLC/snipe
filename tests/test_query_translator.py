@@ -1,4 +1,4 @@
-"""Unit tests for QueryTranslator — LLMRouter mocked at boundary."""
+"""Unit tests for QueryTranslator — LLMRouter and cf-orch backends mocked at boundary."""
 from __future__ import annotations
 
 import json
@@ -73,7 +73,7 @@ def test_parse_response_missing_required_field():
         _parse_response(raw)
 
 
-# ── QueryTranslator (integration with mocked LLMRouter) ──────────────────────
+# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 from app.platforms.ebay.categories import EbayCategoryCache
 from circuitforge_core.db import get_connection, run_migrations
@@ -88,7 +88,22 @@ def db_with_categories(tmp_path):
     return conn
 
 
-def _make_translator(db_conn, llm_response: str) -> QueryTranslator:
+_VALID_LLM_RESPONSE = json.dumps({
+    "base_query": "RTX 3080",
+    "must_include_mode": "groups",
+    "must_include": "rtx|geforce, 3080",
+    "must_exclude": "mining,for parts",
+    "max_price": 300.0,
+    "min_price": None,
+    "condition": ["used"],
+    "category_id": "27386",
+    "explanation": "Searching for used RTX 3080 GPUs under $300.",
+})
+
+
+# ── Local LLMRouter backend ───────────────────────────────────────────────────
+
+def _make_local_translator(db_conn, llm_response: str) -> QueryTranslator:
     from app.platforms.ebay.categories import EbayCategoryCache
     cache = EbayCategoryCache(db_conn)
     mock_router = MagicMock()
@@ -97,18 +112,7 @@ def _make_translator(db_conn, llm_response: str) -> QueryTranslator:
 
 
 def test_translate_returns_search_params(db_with_categories):
-    llm_out = json.dumps({
-        "base_query": "RTX 3080",
-        "must_include_mode": "groups",
-        "must_include": "rtx|geforce, 3080",
-        "must_exclude": "mining,for parts",
-        "max_price": 300.0,
-        "min_price": None,
-        "condition": ["used"],
-        "category_id": "27386",
-        "explanation": "Searching for used RTX 3080 GPUs under $300.",
-    })
-    t = _make_translator(db_with_categories, llm_out)
+    t = _make_local_translator(db_with_categories, _VALID_LLM_RESPONSE)
     result = t.translate("used RTX 3080 under $300 no mining")
     assert result.base_query == "RTX 3080"
     assert result.max_price == 300.0
@@ -116,18 +120,7 @@ def test_translate_returns_search_params(db_with_categories):
 
 def test_translate_injects_category_hints(db_with_categories):
     """The system prompt sent to the LLM must contain category_id hints."""
-    llm_out = json.dumps({
-        "base_query": "GPU",
-        "must_include_mode": "all",
-        "must_include": "",
-        "must_exclude": "",
-        "max_price": None,
-        "min_price": None,
-        "condition": [],
-        "category_id": None,
-        "explanation": "Searching for GPUs.",
-    })
-    t = _make_translator(db_with_categories, llm_out)
+    t = _make_local_translator(db_with_categories, _VALID_LLM_RESPONSE)
     t.translate("GPU")
     call_args = t._llm_router.complete.call_args
     system_prompt = call_args.kwargs.get("system") or call_args.args[1]
@@ -141,7 +134,7 @@ def test_translate_empty_category_cache_still_works(tmp_path):
     conn = get_connection(tmp_path / "empty.db")
     run_migrations(conn, Path("app/db/migrations"))
     # Do NOT seed bootstrap — empty cache
-    llm_out = json.dumps({
+    t = _make_local_translator(conn, json.dumps({
         "base_query": "vinyl",
         "must_include_mode": "all",
         "must_include": "",
@@ -151,8 +144,7 @@ def test_translate_empty_category_cache_still_works(tmp_path):
         "condition": [],
         "category_id": None,
         "explanation": "Searching for vinyl records.",
-    })
-    t = _make_translator(conn, llm_out)
+    }))
     result = t.translate("vinyl records")
     assert result.base_query == "vinyl"
     call_args = t._llm_router.complete.call_args
@@ -168,3 +160,101 @@ def test_translate_llm_error_raises_query_translator_error(db_with_categories):
     t = QueryTranslator(category_cache=cache, llm_router=mock_router)
     with pytest.raises(QueryTranslatorError, match="LLM backend"):
         t.translate("used GPU")
+
+
+# ── cf-orch backend ───────────────────────────────────────────────────────────
+
+def _make_orch_translator(db_conn) -> QueryTranslator:
+    from app.platforms.ebay.categories import EbayCategoryCache
+    cache = EbayCategoryCache(db_conn)
+    return QueryTranslator(category_cache=cache, cforch_url="http://orch.local:8700")
+
+
+def _mock_alloc_response() -> MagicMock:
+    resp = MagicMock()
+    resp.json.return_value = {
+        "url": "http://cf-text.local:11434",
+        "allocation_id": "alloc-abc123",
+        "node_id": "heimdall",
+    }
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _mock_chat_response(content: str) -> MagicMock:
+    resp = MagicMock()
+    resp.json.return_value = {
+        "choices": [{"message": {"content": content}}]
+    }
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _mock_delete_response() -> MagicMock:
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def test_orch_translate_returns_search_params(db_with_categories):
+    t = _make_orch_translator(db_with_categories)
+    with patch("httpx.post") as mock_post, patch("httpx.delete") as mock_delete:
+        mock_post.side_effect = [
+            _mock_alloc_response(),
+            _mock_chat_response(_VALID_LLM_RESPONSE),
+        ]
+        mock_delete.return_value = _mock_delete_response()
+        result = t.translate("used RTX 3080 under $300")
+    assert result.base_query == "RTX 3080"
+    assert result.max_price == 300.0
+
+
+def test_orch_allocates_with_correct_task_tag(db_with_categories):
+    t = _make_orch_translator(db_with_categories)
+    with patch("httpx.post") as mock_post, patch("httpx.delete"):
+        mock_post.side_effect = [
+            _mock_alloc_response(),
+            _mock_chat_response(_VALID_LLM_RESPONSE),
+        ]
+        t.translate("GPU")
+    alloc_call = mock_post.call_args_list[0]
+    assert alloc_call.args[0] == "http://orch.local:8700/api/inference/task"
+    body = alloc_call.kwargs.get("json") or alloc_call.args[1]
+    assert body == {"product": "snipe", "task": "query_translation"}
+
+
+def test_orch_releases_allocation_after_success(db_with_categories):
+    t = _make_orch_translator(db_with_categories)
+    with patch("httpx.post") as mock_post, patch("httpx.delete") as mock_delete:
+        mock_post.side_effect = [
+            _mock_alloc_response(),
+            _mock_chat_response(_VALID_LLM_RESPONSE),
+        ]
+        mock_delete.return_value = _mock_delete_response()
+        t.translate("GPU")
+    mock_delete.assert_called_once()
+    delete_url = mock_delete.call_args.args[0]
+    assert "alloc-abc123" in delete_url
+
+
+def test_orch_releases_allocation_on_inference_failure(db_with_categories):
+    """Allocation must be released even when the inference call fails."""
+    t = _make_orch_translator(db_with_categories)
+    with patch("httpx.post") as mock_post, patch("httpx.delete") as mock_delete:
+        mock_post.side_effect = [
+            _mock_alloc_response(),
+            Exception("inference timeout"),
+        ]
+        mock_delete.return_value = _mock_delete_response()
+        with pytest.raises(QueryTranslatorError, match="LLM backend"):
+            t.translate("GPU")
+    mock_delete.assert_called_once()
+
+
+def test_init_requires_at_least_one_backend(tmp_path):
+    from circuitforge_core.db import get_connection, run_migrations
+    conn = get_connection(tmp_path / "test.db")
+    run_migrations(conn, Path("app/db/migrations"))
+    cache = EbayCategoryCache(conn)
+    with pytest.raises(ValueError, match="cforch_url or llm_router"):
+        QueryTranslator(category_cache=cache)

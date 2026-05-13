@@ -2,9 +2,15 @@
 # BSL 1.1 License
 """LLM query builder — translates natural language to eBay SearchFilters.
 
-The QueryTranslator calls LLMRouter.complete() (synchronous) with a domain-aware
-system prompt. The prompt includes category hints injected from EbayCategoryCache.
-The LLM returns a single JSON object matching SearchParamsResponse.
+Supports two backends, selected at construction time:
+
+  cforch_url  — cf-orch task endpoint (cloud/premium). The coordinator resolves
+                product+task to a model and returns an allocation. The caller
+                POSTs to the allocated service URL, then DELETEs the allocation.
+
+  llm_router  — circuitforge_core.LLMRouter (local installs: ollama/vllm/api keys).
+
+Exactly one of cforch_url or llm_router must be supplied.
 """
 from __future__ import annotations
 
@@ -12,6 +18,8 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
+
+import httpx
 
 if TYPE_CHECKING:
     from app.platforms.ebay.categories import EbayCategoryCache
@@ -128,11 +136,23 @@ class QueryTranslator:
 
     Args:
         category_cache: An EbayCategoryCache instance (may have empty cache).
-        llm_router: An LLMRouter instance from circuitforge_core.
+        cforch_url: cf-orch coordinator base URL (cloud/premium path).
+        llm_router: A circuitforge_core LLMRouter instance (local path).
+
+    Exactly one of cforch_url or llm_router must be provided.
     """
 
-    def __init__(self, category_cache: "EbayCategoryCache", llm_router: object) -> None:
+    def __init__(
+        self,
+        category_cache: "EbayCategoryCache",
+        *,
+        cforch_url: str | None = None,
+        llm_router: object | None = None,
+    ) -> None:
+        if cforch_url is None and llm_router is None:
+            raise ValueError("Either cforch_url or llm_router must be provided")
         self._cache = category_cache
+        self._cforch_url = cforch_url
         self._llm_router = llm_router
 
     def translate(self, natural_language: str) -> SearchParamsResponse:
@@ -154,14 +174,58 @@ class QueryTranslator:
         system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(category_hints=category_hints)
 
         try:
-            raw = self._llm_router.complete(
-                natural_language,
-                system=system_prompt,
-                max_tokens=512,
-            )
+            if self._cforch_url:
+                raw = self._call_orch(system_prompt, natural_language)
+            else:
+                raw = self._call_local(system_prompt, natural_language)
+        except QueryTranslatorError:
+            raise
         except Exception as exc:
             raise QueryTranslatorError(
                 f"LLM backend error: {exc}", raw=""
             ) from exc
 
         return _parse_response(raw)
+
+    def _call_orch(self, system_prompt: str, user_message: str) -> str:
+        """Allocate via cf-orch task endpoint, call the model, release the slot."""
+        alloc_resp = httpx.post(
+            f"{self._cforch_url}/api/inference/task",
+            json={"product": "snipe", "task": "query_translation"},
+            timeout=10.0,
+        )
+        alloc_resp.raise_for_status()
+        alloc = alloc_resp.json()
+        service_url = alloc["url"]
+        allocation_id = alloc["allocation_id"]
+        try:
+            resp = httpx.post(
+                f"{service_url}/v1/chat/completions",
+                json={
+                    "model": "__auto__",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "max_tokens": 512,
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        finally:
+            try:
+                httpx.delete(
+                    f"{self._cforch_url}/api/services/cf-text/allocations/{allocation_id}",
+                    timeout=5.0,
+                )
+            except Exception:
+                log.warning("Failed to release cf-orch allocation %s", allocation_id)
+
+    def _call_local(self, system_prompt: str, user_message: str) -> str:
+        """Call the locally-configured LLMRouter (ollama/vllm/api keys)."""
+        return self._llm_router.complete(  # type: ignore[union-attr]
+            user_message,
+            system=system_prompt,
+            max_tokens=512,
+        )

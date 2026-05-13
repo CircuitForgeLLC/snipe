@@ -209,13 +209,21 @@ async def _lifespan(app: FastAPI):
             _category_cache.refresh(token_manager=None)  # bootstrap fallback
 
         try:
-            from app.llm.router import LLMRouter
-            _llm_router = LLMRouter()
-            _query_translator = QueryTranslator(
-                category_cache=_category_cache,
-                llm_router=_llm_router,
-            )
-            log.info("LLM query builder ready.")
+            cforch_url = os.getenv("CF_ORCH_URL") or None
+            if cforch_url:
+                _query_translator = QueryTranslator(
+                    category_cache=_category_cache,
+                    cforch_url=cforch_url,
+                )
+                log.info("LLM query builder ready (cf-orch).")
+            else:
+                from app.llm.router import LLMRouter
+                _llm_router = LLMRouter()
+                _query_translator = QueryTranslator(
+                    category_cache=_category_cache,
+                    llm_router=_llm_router,
+                )
+                log.info("LLM query builder ready (local LLM).")
         except Exception:
             log.info("No LLM backend configured — query builder disabled.")
     except Exception:
@@ -2005,7 +2013,7 @@ async def build_search_query(
     if translator is None:
         raise HTTPException(
             status_code=503,
-            detail="No LLM backend configured. Set OLLAMA_HOST, ANTHROPIC_API_KEY, or OPENAI_API_KEY.",
+            detail="No LLM backend configured. Set CF_ORCH_URL (cloud) or OLLAMA_HOST / ANTHROPIC_API_KEY / OPENAI_API_KEY (local).",
         )
 
     from app.llm.query_translator import QueryTranslatorError
