@@ -7,28 +7,30 @@ Current task types:
     trust_photo_analysis — download primary photo, run vision LLM, write
                            result to trust_scores.photo_analysis_json (Paid tier).
 
-Prompt note: The vision prompt is a functional first pass. Tune against real
-eBay listings before GA — specifically stock-photo vs genuine-product distinction
-and the damage vocabulary.
+Image assessment routing:
+    Cloud (CF_ORCH_URL set): allocates via cf-orch task endpoint
+        product=snipe, task=image_assessment.
+    Local (no CF_ORCH_URL) or TaskNotFound fallback: uses LLMRouter
+        with a vision-capable local backend (moondream2, llava, etc.).
 """
 from __future__ import annotations
 
 import base64
 import json
 import logging
+import os
 from pathlib import Path
 
+import httpx
 import requests
 from circuitforge_core.db import get_connection
-from circuitforge_core.llm import LLMRouter
 
 log = logging.getLogger(__name__)
 
 LLM_TASK_TYPES: frozenset[str] = frozenset({"trust_photo_analysis"})
 
 VRAM_BUDGETS: dict[str, float] = {
-    # moondream2 / vision-capable LLM — single image, short response
-    "trust_photo_analysis": 2.0,
+    "trust_photo_analysis": 6000,  # Q5_K_M Qwen2-VL via cf-orch; LLMRouter fallback uses 2.0 GB
 }
 
 _VISION_SYSTEM_PROMPT = (
@@ -51,8 +53,7 @@ def insert_task(
 ) -> tuple[int, bool]:
     """Insert a background task if no identical task is already in-flight.
 
-    Uses get_connection() so WAL mode and timeout=30 apply — same as all other
-    Snipe DB access.  Returns (task_id, is_new).
+    Returns (task_id, is_new).
     """
     conn = get_connection(db_path)
     conn.row_factory = __import__("sqlite3").Row
@@ -120,32 +121,26 @@ def _run_trust_photo_analysis(
     p = json.loads(params or "{}")
     photo_url = p.get("photo_url", "")
     listing_title = p.get("listing_title", "")
-    # user_db: per-user DB in cloud mode; same as db_path in local mode.
     result_db = Path(p.get("user_db", str(db_path)))
 
     if not photo_url:
         raise ValueError("trust_photo_analysis: 'photo_url' is required in params")
 
-    # Download and base64-encode the photo
     resp = requests.get(photo_url, timeout=10)
     resp.raise_for_status()
     image_b64 = base64.b64encode(resp.content).decode()
+    image_data_url = f"data:image/jpeg;base64,{image_b64}"
 
-    # Build user prompt with optional title context
-    user_prompt = "Evaluate this eBay listing photo."
+    user_prompt = "Assess this listing image."
     if listing_title:
-        user_prompt = f"Evaluate this eBay listing photo for: {listing_title}"
+        user_prompt = f"Assess this eBay listing image: {listing_title}"
 
-    # Call LLMRouter with vision capability
-    router = LLMRouter()
-    raw = router.complete(
-        user_prompt,
-        system=_VISION_SYSTEM_PROMPT,
-        images=[image_b64],
-        max_tokens=128,
-    )
+    cforch_url = os.getenv("CF_ORCH_URL")
+    if cforch_url:
+        raw = _assess_via_orch(cforch_url, image_data_url, user_prompt)
+    else:
+        raw = _assess_via_local_llm(image_b64, user_prompt)
 
-    # Parse — be lenient: strip markdown fences if present
     try:
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         analysis = json.loads(cleaned)
@@ -167,4 +162,55 @@ def _run_trust_photo_analysis(
         analysis.get("is_stock_photo"),
         analysis.get("visible_damage"),
         analysis.get("confidence"),
+    )
+
+
+def _assess_via_orch(cforch_url: str, image_data_url: str, user_prompt: str) -> str:
+    """Run photo assessment via cf-orch task endpoint (cloud path)."""
+    from circuitforge_orch.client import CFOrchClient, TaskNotFound
+
+    client = CFOrchClient(cforch_url)
+    try:
+        with client.task_allocate("snipe", "image_assessment") as alloc:
+            resp = httpx.post(
+                f"{alloc.url}/v1/chat/completions",
+                json={
+                    "model": alloc.model or "__auto__",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": _VISION_SYSTEM_PROMPT,
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": image_data_url}},
+                                {"type": "text", "text": user_prompt},
+                            ],
+                        },
+                    ],
+                    "max_tokens": 128,
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except TaskNotFound:
+        log.warning(
+            "snipe.image_assessment not registered in cf-orch — falling back to local LLM"
+        )
+        image_b64 = image_data_url.split(",", 1)[1]
+        return _assess_via_local_llm(image_b64, user_prompt)
+
+
+def _assess_via_local_llm(image_b64: str, user_prompt: str) -> str:
+    """Run photo assessment via local LLMRouter (local/self-hosted path)."""
+    from app.llm.router import LLMRouter
+
+    router = LLMRouter()
+    return router.complete(
+        user_prompt,
+        system=_VISION_SYSTEM_PROMPT,
+        images=[image_b64],
+        max_tokens=128,
     )

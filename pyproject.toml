@@ -24,6 +24,7 @@ dependencies = [
     "cryptography>=42.0",
     "PyJWT>=2.8",
     "httpx>=0.27",
+    "circuitforge-orch>=0.1.0",
 ]
 
 [project.optional-dependencies]
