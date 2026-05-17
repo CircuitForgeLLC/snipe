@@ -8,6 +8,7 @@
 
   [![License: MIT / BSL 1.1](https://img.shields.io/badge/license-MIT%20%2F%20BSL%201.1-blue)](LICENSE)
   [![Status: Beta](https://img.shields.io/badge/status-beta-yellow)]()
+  [![Version](https://img.shields.io/badge/version-0.5.1-green)](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe/releases)
   [![Forgejo](https://img.shields.io/badge/primary%20repo-Forgejo-orange)](https://git.opensourcesolarpunk.com/Circuit-Forge/snipe)
   [![Docs](https://img.shields.io/badge/docs-docs.circuitforge.tech%2Fsnipe-green)](https://docs.circuitforge.tech/snipe)
 
