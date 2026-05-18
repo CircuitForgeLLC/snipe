@@ -36,8 +36,3 @@ CREATE TABLE IF NOT EXISTS reported_sellers (
     UNIQUE (platform, platform_seller_id)
 );
 
--- Migration tracking (same pattern as CommunityDB in circuitforge-core)
-CREATE TABLE IF NOT EXISTS _snipe_shared_migrations (
-    filename   TEXT PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
