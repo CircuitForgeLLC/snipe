@@ -21,6 +21,10 @@ class Store:
         # WAL mode: allows concurrent readers + one writer without blocking
         self._conn.execute("PRAGMA journal_mode=WAL")
 
+    def clone(self) -> Store:
+        """Create a new independent instance pointing to the same database."""
+        return Store(self._db_path)
+
     # --- Seller ---
 
     def delete_seller_data(self, platform: str, platform_seller_id: str) -> None:
