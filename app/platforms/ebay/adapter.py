@@ -22,7 +22,7 @@ _SHOPPING_API_INTER_REQUEST_DELAY = 0.5   # seconds between successive calls
 _SELLER_ENRICH_TTL_HOURS = 24             # skip re-enrichment within this window
 
 from app.db.models import Listing, MarketComp, Seller
-from app.db.store import Store
+from app.db.protocol import SharedTableProtocol
 from app.platforms import PlatformAdapter, SearchFilters
 from app.platforms.ebay.auth import EbayTokenManager
 from app.platforms.ebay.normaliser import normalise_listing, normalise_seller
@@ -67,7 +67,7 @@ BROWSE_BASE = {
 
 
 class EbayAdapter(PlatformAdapter):
-    def __init__(self, token_manager: EbayTokenManager, shared_store: Store, env: str = "production"):
+    def __init__(self, token_manager: EbayTokenManager, shared_store: SharedTableProtocol, env: str = "production"):
         self._tokens = token_manager
         self._store = shared_store
         self._env = env
