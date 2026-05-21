@@ -6,7 +6,7 @@ Snipe LLMRouter shim — tri-level config path priority.
 Config lookup order:
   1. <repo>/config/llm.yaml  — per-install local override
   2. ~/.config/circuitforge/llm.yaml  — user-level config (circuitforge-core default)
-  3. env-var auto-config  (ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_HOST, CF_ORCH_URL)
+  3. env-var auto-config  (ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_HOST, GPU_SERVER_URL)
 """
 from pathlib import Path
 

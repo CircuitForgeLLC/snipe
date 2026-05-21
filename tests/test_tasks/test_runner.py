@@ -173,7 +173,7 @@ def _make_orch_client_mock(vision_json: str) -> MagicMock:
 
 
 def test_run_task_photo_analysis_orch_success(tmp_db: Path):
-    """Cloud path: CFOrchClient.task_allocate is used when CF_ORCH_URL is set."""
+    """Cloud path: CFOrchClient.task_allocate is used when GPU_SERVER_URL is set."""
     task_id, _ = insert_task(tmp_db, "trust_photo_analysis", job_id=1, params=_PARAMS)
 
     chat_resp = MagicMock()
@@ -181,7 +181,7 @@ def test_run_task_photo_analysis_orch_success(tmp_db: Path):
     chat_resp.raise_for_status = MagicMock()
 
     with patch("app.tasks.runner.requests") as mock_req, \
-         patch.dict("os.environ", {"CF_ORCH_URL": "http://cf-orch.local:8700"}), \
+         patch.dict("os.environ", {"GPU_SERVER_URL": "http://cf-orch.local:8700"}), \
          patch("app.tasks.runner.httpx") as mock_httpx, \
          patch("circuitforge_orch.client.CFOrchClient") as MockClient:
 
@@ -216,7 +216,7 @@ def test_run_task_photo_analysis_orch_uses_image_assessment_task(tmp_db: Path):
     chat_resp.raise_for_status = MagicMock()
 
     with patch("app.tasks.runner.requests") as mock_req, \
-         patch.dict("os.environ", {"CF_ORCH_URL": "http://cf-orch.local:8700"}), \
+         patch.dict("os.environ", {"GPU_SERVER_URL": "http://cf-orch.local:8700"}), \
          patch("app.tasks.runner.httpx") as mock_httpx, \
          patch("circuitforge_orch.client.CFOrchClient") as MockClient:
 
@@ -248,7 +248,7 @@ def test_run_task_photo_analysis_orch_sends_image_url_content(tmp_db: Path):
         return resp
 
     with patch("app.tasks.runner.requests") as mock_req, \
-         patch.dict("os.environ", {"CF_ORCH_URL": "http://cf-orch.local:8700"}), \
+         patch.dict("os.environ", {"GPU_SERVER_URL": "http://cf-orch.local:8700"}), \
          patch("app.tasks.runner.httpx") as mock_httpx, \
          patch("circuitforge_orch.client.CFOrchClient") as MockClient:
 
@@ -282,7 +282,7 @@ def test_run_task_photo_analysis_orch_task_not_found_falls_back(tmp_db: Path):
     client_instance.task_allocate.return_value = cm
 
     with patch("app.tasks.runner.requests") as mock_req, \
-         patch.dict("os.environ", {"CF_ORCH_URL": "http://cf-orch.local:8700"}), \
+         patch.dict("os.environ", {"GPU_SERVER_URL": "http://cf-orch.local:8700"}), \
          patch("circuitforge_orch.client.CFOrchClient", return_value=client_instance), \
          patch("app.tasks.runner._assess_via_local_llm", return_value=_VISION_JSON) as mock_local:
 

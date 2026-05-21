@@ -6,7 +6,7 @@
 # (claude_code, copilot) are intentionally excluded here.
 #
 # CF Orchestrator routes both ollama and vllm allocations for VRAM-aware
-# scheduling.  CF_ORCH_URL must be set in .env for allocations to resolve;
+# scheduling.  GPU_SERVER_URL must be set in .env for allocations to resolve;
 # if cf-orch is unreachable the backend falls back to its static base_url.
 #
 # Model choice for query builder: llama3.1:8b

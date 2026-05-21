@@ -18,8 +18,8 @@ services:
     environment:
       - RELOAD=true
       # Point the LLM/vision task scheduler at the local cf-orch coordinator.
-      # Only has effect when CF_ORCH_URL is set (uncomment in .env, or set inline).
-      # - CF_ORCH_URL=http://10.1.10.71:7700
+      # Only has effect when GPU_SERVER_URL is set (uncomment in .env, or set inline).
+      # - GPU_SERVER_URL=http://10.1.10.71:7700
 
   # cf-orch agent — routes trust_photo_analysis vision tasks to the GPU coordinator.
   # Only starts when you pass --profile orch:

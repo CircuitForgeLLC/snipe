@@ -8,9 +8,9 @@ Current task types:
                            result to trust_scores.photo_analysis_json (Paid tier).
 
 Image assessment routing:
-    Cloud (CF_ORCH_URL set): allocates via cf-orch task endpoint
+    Cloud (GPU_SERVER_URL set): allocates via cf-orch task endpoint
         product=snipe, task=image_assessment.
-    Local (no CF_ORCH_URL) or TaskNotFound fallback: uses LLMRouter
+    Local (no GPU_SERVER_URL) or TaskNotFound fallback: uses LLMRouter
         with a vision-capable local backend (moondream2, llava, etc.).
 """
 from __future__ import annotations
@@ -135,7 +135,7 @@ def _run_trust_photo_analysis(
     if listing_title:
         user_prompt = f"Assess this eBay listing image: {listing_title}"
 
-    cforch_url = os.getenv("CF_ORCH_URL")
+    cforch_url = os.getenv("GPU_SERVER_URL") or os.getenv("CF_ORCH_URL")
     if cforch_url:
         raw = _assess_via_orch(cforch_url, image_data_url, user_prompt)
     else:

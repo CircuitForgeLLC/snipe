@@ -209,7 +209,7 @@ async def _lifespan(app: FastAPI):
             _category_cache.refresh(token_manager=None)  # bootstrap fallback
 
         try:
-            cforch_url = os.getenv("CF_ORCH_URL") or None
+            cforch_url = os.getenv("GPU_SERVER_URL") or os.getenv("CF_ORCH_URL") or None
             if cforch_url:
                 _query_translator = QueryTranslator(
                     category_cache=_category_cache,
