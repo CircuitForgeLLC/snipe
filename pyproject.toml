@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Auction listing monitor and trust scorer"
 requires-python = ">=3.11"
 dependencies = [
-    "circuitforge-core>=0.8.0",
+    "circuitforge-core[community]>=0.8.0",
     "streamlit>=1.32",
     "requests>=2.31",
     "imagehash>=4.3",

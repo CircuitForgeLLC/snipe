@@ -2,7 +2,7 @@ import hashlib
 import math
 
 from app.db.models import Listing, TrustScore
-from app.db.store import Store
+from app.db.protocol import SharedTableProtocol
 
 from .aggregator import Aggregator
 from .metadata import MetadataScorer
@@ -12,7 +12,7 @@ from .photo import PhotoScorer
 class TrustScorer:
     """Orchestrates metadata + photo scoring for a batch of listings."""
 
-    def __init__(self, shared_store: Store):
+    def __init__(self, shared_store: SharedTableProtocol):
         self._store = shared_store
         self._meta = MetadataScorer()
         self._photo = PhotoScorer()

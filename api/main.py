@@ -33,6 +33,7 @@ from api.cloud_session import CloudUser, compute_features, get_session
 from api.ebay_webhook import router as ebay_webhook_router
 from app.db.models import SavedSearch as SavedSearchModel
 from app.db.models import ScammerEntry
+from app.db.protocol import SharedTableProtocol
 from app.db.store import Store
 from app.platforms import SUPPORTED_PLATFORMS, SearchFilters
 from app.platforms.ebay.adapter import EbayAdapter
@@ -142,6 +143,19 @@ def _get_community_store() -> "SnipeCommunityStore | None":
     return _community_store
 
 
+# ── Shared Postgres backend (optional — active when SNIPE_SHARED_DB_URL is set) ─
+# Replaces the SQLite shared.db for sellers, market_comps, reported_sellers, and
+# scammer_blocklist. ThreadedConnectionPool is thread-safe; one instance per process.
+_pg_shared_store: "SharedTableProtocol | None" = None
+
+
+def _make_shared_store(path: Path) -> SharedTableProtocol:
+    """Return the active shared backend — Postgres if configured, SQLite otherwise."""
+    if _pg_shared_store is not None:
+        return _pg_shared_store
+    return Store(path)
+
+
 # ── LLM Query Builder singletons (optional — requires LLM backend) ────────────
 _category_cache = None
 _query_translator = None
@@ -153,7 +167,7 @@ def _get_query_translator():
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    global _community_store
+    global _community_store, _pg_shared_store
     # Pre-warm the Chromium browser pool so the first scrape request does not
     # pay the full cold-start cost (5-10s Xvfb + browser launch).
     # Pool size is controlled via BROWSER_POOL_SIZE env var (default: 2).
@@ -177,6 +191,21 @@ async def _lifespan(app: FastAPI):
     sched_db = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     get_scheduler(sched_db)
     log.info("Snipe task scheduler started (db=%s)", sched_db)
+
+    # Shared Postgres backend — optional. Replaces SQLite for sellers, market_comps,
+    # reported_sellers, and scammer_blocklist under concurrent load.
+    snipe_shared_dsn = os.environ.get("SNIPE_SHARED_DB_URL", "")
+    if snipe_shared_dsn:
+        try:
+            from app.db.pg_shared import SnipeSharedDB, SnipeSharedStore as _SnipeSharedStore
+            _pg_db = SnipeSharedDB(snipe_shared_dsn)
+            _pg_db.run_migrations()
+            _pg_shared_store = _SnipeSharedStore(_pg_db)
+            log.info("Shared Postgres backend ready (sellers, market_comps, blocklist)")
+        except Exception:
+            log.exception(
+                "SNIPE_SHARED_DB_URL set but Postgres init failed — falling back to SQLite"
+            )
 
     # Community DB — optional. Skipped gracefully if COMMUNITY_DB_URL is unset.
     community_db_url = os.environ.get("COMMUNITY_DB_URL", "")
@@ -446,7 +475,7 @@ def session_info(response: Response, session: CloudUser = Depends(get_session)):
 
 def _trigger_scraper_enrichment(
     listings: list,
-    shared_store: Store,
+    shared_store: SharedTableProtocol,
     shared_db: Path,
     user_db: Path | None = None,
     query: str = "",
@@ -512,7 +541,7 @@ def _trigger_scraper_enrichment(
         if not session_id or session_id not in _update_queues:
             return
         q = _update_queues[session_id]
-        thread_shared = Store(shared_db)
+        thread_shared = shared_store.clone()
         thread_user = Store(user_db or shared_db)
         scorer = TrustScorer(thread_shared)
         comp = thread_shared.get_market_comp("ebay", hashlib.md5(query.encode()).hexdigest())
@@ -538,7 +567,7 @@ def _trigger_scraper_enrichment(
 
     def _run():
         try:
-            enricher = ScrapedEbayAdapter(Store(shared_db))
+            enricher = ScrapedEbayAdapter(shared_store.clone())
             if needs_btf:
                 enricher.enrich_sellers_btf(needs_btf, max_workers=2)
                 log.info("BTF enrichment complete for %d sellers", len(needs_btf))
@@ -812,7 +841,7 @@ def search(
         _update_queues[session_id] = _queue.SimpleQueue()
 
         try:
-            shared_store = Store(shared_db)
+            shared_store = _make_shared_store(shared_db)
             user_store = Store(user_db)
 
             # Re-hydrate Listing dataclass instances from the cached dicts so the
@@ -897,13 +926,14 @@ def search(
     _evict_expired_cache()
     log.info("cache: miss key=%s q=%r", cache_key, q)
 
-    # Each thread creates its own Store — sqlite3 check_same_thread=True.
+    # Each thread creates its own store via clone() — sqlite3 check_same_thread=True;
+    # SnipeSharedStore.clone() returns self (ThreadedConnectionPool is thread-safe).
     def _run_search(ebay_query: str) -> list:
-        return _make_adapter(Store(shared_db), adapter, platform=platform).search(ebay_query, base_filters)
+        return _make_adapter(_make_shared_store(shared_db), adapter, platform=platform).search(ebay_query, base_filters)
 
     def _run_comps() -> None:
         try:
-            _make_adapter(Store(shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
+            _make_adapter(_make_shared_store(shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
         except Exception:
             log.warning("comps: unhandled exception for %r", comp_query, exc_info=True)
 
@@ -944,10 +974,9 @@ def search(
     _update_queues[session_id] = _queue.SimpleQueue()
 
     try:
-        # Main-thread stores — fresh connections, same thread.
-        # shared_store: sellers, market_comps (all users share this data)
-        # user_store: listings, saved_searches (per-user in cloud mode, same file in local mode)
-        shared_store = Store(shared_db)
+        # Main-thread stores — shared_store may be Postgres (sellers, market_comps);
+        # user_store is always per-user SQLite (listings, trust_scores, saved_searches).
+        shared_store = _make_shared_store(shared_db)
         user_store = Store(user_db)
 
         user_store.save_listings(listings)
@@ -1207,7 +1236,7 @@ def search_async(
                     cached_listings_raw = payload["listings"]
                     cached_market_price = payload["market_price"]
                     try:
-                        shared_store = Store(_shared_db)
+                        shared_store = _make_shared_store(_shared_db)
                         user_store = Store(_user_db)
                         listings = [_Listing(**d) for d in cached_listings_raw]
                         user_store.save_listings(listings)
@@ -1287,11 +1316,11 @@ def search_async(
 
         try:
             def _run_search(ebay_query: str) -> list:
-                return _make_adapter(Store(_shared_db), adapter, platform=platform).search(ebay_query, base_filters)
+                return _make_adapter(_make_shared_store(_shared_db), adapter, platform=platform).search(ebay_query, base_filters)
 
             def _run_comps() -> None:
                 try:
-                    _make_adapter(Store(_shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
+                    _make_adapter(_make_shared_store(_shared_db), adapter, platform=platform).get_completed_sales(comp_query, pages)
                 except Exception:
                     log.warning("async comps: unhandled exception for %r", comp_query, exc_info=True)
 
@@ -1314,7 +1343,7 @@ def search_async(
                 platform, _auth_label(_user_id), _tier, adapter_used, pages, len(listings), q_norm,
             )
 
-            shared_store = Store(_shared_db)
+            shared_store = _make_shared_store(_shared_db)
             user_store = Store(_user_db)
 
             user_store.save_listings(listings)
@@ -1473,7 +1502,7 @@ def enrich_seller(
     """
     import threading
 
-    shared_store = Store(session.shared_db)
+    shared_store = _make_shared_store(session.shared_db)
     user_store = Store(session.user_db)
     shared_db = session.shared_db
 
@@ -1502,7 +1531,7 @@ def enrich_seller(
 
         def _btf():
             try:
-                ScrapedEbayAdapter(Store(shared_db)).enrich_sellers_btf(
+                ScrapedEbayAdapter(shared_store.clone()).enrich_sellers_btf(
                     {seller: listing_id}, max_workers=1
                 )
             except Exception as e:
@@ -1510,7 +1539,7 @@ def enrich_seller(
 
         def _ssn():
             try:
-                ScrapedEbayAdapter(Store(shared_db)).enrich_sellers_categories(
+                ScrapedEbayAdapter(shared_store.clone()).enrich_sellers_categories(
                     [seller], max_workers=1
                 )
             except Exception as e:
@@ -1781,7 +1810,7 @@ class BlocklistAdd(BaseModel):
 
 @app.get("/api/blocklist")
 def list_blocklist(session: CloudUser = Depends(get_session)):
-    store = Store(session.shared_db)
+    store = _make_shared_store(session.shared_db)
     return {"entries": [dataclasses.asdict(e) for e in store.list_blocklist()]}
 
 
@@ -1792,7 +1821,7 @@ def add_to_blocklist(body: BlocklistAdd, session: CloudUser = Depends(get_sessio
             status_code=403,
             detail="Sign in to report sellers to the community blocklist.",
         )
-    store = Store(session.shared_db)
+    store = _make_shared_store(session.shared_db)
     entry = store.add_to_blocklist(ScammerEntry(
         platform=body.platform,
         platform_seller_id=body.platform_seller_id,
@@ -1826,13 +1855,13 @@ def add_to_blocklist(body: BlocklistAdd, session: CloudUser = Depends(get_sessio
 
 @app.delete("/api/blocklist/{platform_seller_id}", status_code=204)
 def remove_from_blocklist(platform_seller_id: str, session: CloudUser = Depends(get_session)):
-    Store(session.shared_db).remove_from_blocklist("ebay", platform_seller_id)
+    _make_shared_store(session.shared_db).remove_from_blocklist("ebay", platform_seller_id)
 
 
 @app.get("/api/blocklist/export")
 def export_blocklist(session: CloudUser = Depends(get_session)):
     """Download the blocklist as a CSV file."""
-    entries = Store(session.shared_db).list_blocklist()
+    entries = _make_shared_store(session.shared_db).list_blocklist()
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["platform", "platform_seller_id", "username", "reason", "source", "created_at"])
@@ -1864,7 +1893,7 @@ async def import_blocklist(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
 
-    store = Store(session.shared_db)
+    store = _make_shared_store(session.shared_db)
     imported = 0
     errors: list[str] = []
     reader = csv.DictReader(io.StringIO(text))

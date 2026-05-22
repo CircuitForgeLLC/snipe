@@ -23,6 +23,9 @@ services:
       # GPU_SERVER_URL routes LLM query builder through cf-orch for VRAM-aware scheduling.
       # Override in .env to use a different coordinator URL.
       GPU_SERVER_URL: "http://host.docker.internal:7700"
+      # SNIPE_SHARED_DB_URL — Postgres DSN for shared tables (sellers, market_comps, blocklist).
+      # Required for production multi-user deployments. Set in .env (never commit).
+      # SNIPE_SHARED_DB_URL: "postgresql://snipe:<password>@postgres:5432/snipe_shared"
       CF_APP_NAME: snipe
     extra_hosts:
       - "host.docker.internal:host-gateway"

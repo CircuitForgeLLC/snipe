@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 from bs4 import BeautifulSoup
 
 from app.db.models import Listing, MarketComp, Seller
-from app.db.store import Store
+from app.db.protocol import SharedTableProtocol
 from app.platforms import PlatformAdapter, SearchFilters
 
 EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
@@ -286,7 +286,7 @@ class ScrapedEbayAdapter(PlatformAdapter):
     category_history) cause TrustScorer to set score_is_partial=True.
     """
 
-    def __init__(self, shared_store: Store, delay: float = 1.0):
+    def __init__(self, shared_store: SharedTableProtocol, delay: float = 1.0):
         self._store = shared_store
         self._delay = delay
 
@@ -374,8 +374,6 @@ class ScrapedEbayAdapter(PlatformAdapter):
         Does not raise — failures per-seller are silently skipped so the main
         search response is never blocked.
         """
-        db_path = self._store._db_path  # capture for thread-local Store creation
-
         def _enrich_one(item: tuple[str, str]) -> None:
             seller_id, listing_id = item
             try:
@@ -388,7 +386,7 @@ class ScrapedEbayAdapter(PlatformAdapter):
                 )
                 if age_days is None and fb_count is None:
                     return   # nothing new to write
-                thread_store = Store(db_path)
+                thread_store = self._store.clone()
                 seller = thread_store.get_seller("ebay", seller_id)
                 if not seller:
                     log.warning("BTF enrich: seller %s not found in DB", seller_id)
