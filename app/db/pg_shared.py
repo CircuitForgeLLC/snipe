@@ -8,7 +8,7 @@ from typing import Optional
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
-from app.db.models import MarketComp, Seller
+from app.db.models import MarketComp, ScammerEntry, Seller
 
 log = logging.getLogger(__name__)
 
@@ -246,5 +246,135 @@ class SnipeSharedStore:
                     (platform,),
                 )
                 return [row[0] for row in cur.fetchall()]
+        finally:
+            self._db.putconn(conn)
+
+    # Seller Category Refresh
+
+    def refresh_seller_categories(
+        self,
+        platform: str,
+        seller_ids: list[str],
+        listing_store=None,  # always a SQLite Store in practice
+    ) -> int:
+        """Derive category_history_json from listing data and update sellers in Postgres.
+
+        listing_store must be provided (it's always the per-user SQLite Store).
+        Returns count of sellers updated.
+        """
+        from app.platforms.ebay.scraper import _classify_category_label  # lazy to avoid circular
+        import json
+
+        if not seller_ids or listing_store is None:
+            return 0
+
+        updated = 0
+        for sid in seller_ids:
+            seller = self.get_seller(platform, sid)
+            if not seller or seller.category_history_json not in ("{}", "", None):
+                continue
+            # listing_store is always a SQLite Store; access _conn directly for the query.
+            rows = listing_store._conn.execute(
+                "SELECT category_name, COUNT(*) FROM listings "
+                "WHERE platform=? AND seller_platform_id=? AND category_name IS NOT NULL "
+                "GROUP BY category_name",
+                (platform, sid),
+            ).fetchall()
+            if not rows:
+                continue
+            counts: dict[str, int] = {}
+            for cat_name, cnt in rows:
+                key = _classify_category_label(cat_name)
+                if key:
+                    counts[key] = counts.get(key, 0) + cnt
+            if counts:
+                from dataclasses import replace
+                self.save_sellers([replace(seller, category_history_json=json.dumps(counts))])
+                updated += 1
+        return updated
+
+    # Scammer Blocklist
+
+    def is_blocklisted(self, platform: str, platform_seller_id: str) -> bool:
+        conn = self._db.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM scammer_blocklist "
+                    "WHERE platform = %s AND platform_seller_id = %s LIMIT 1",
+                    (platform, platform_seller_id),
+                )
+                return cur.fetchone() is not None
+        finally:
+            self._db.putconn(conn)
+
+    def add_to_blocklist(self, entry: ScammerEntry) -> ScammerEntry:
+        conn = self._db.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO scammer_blocklist
+                        (platform, platform_seller_id, username, reason, source)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (platform, platform_seller_id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        reason   = COALESCE(EXCLUDED.reason, scammer_blocklist.reason),
+                        source   = EXCLUDED.source
+                    """,
+                    (entry.platform, entry.platform_seller_id, entry.username,
+                     entry.reason, entry.source),
+                )
+                conn.commit()
+                cur.execute(
+                    "SELECT id, created_at FROM scammer_blocklist "
+                    "WHERE platform = %s AND platform_seller_id = %s",
+                    (entry.platform, entry.platform_seller_id),
+                )
+                row = cur.fetchone()
+            from dataclasses import replace
+            return replace(entry, id=row[0], created_at=str(row[1]))
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.putconn(conn)
+
+    def remove_from_blocklist(self, platform: str, platform_seller_id: str) -> None:
+        conn = self._db.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scammer_blocklist "
+                    "WHERE platform = %s AND platform_seller_id = %s",
+                    (platform, platform_seller_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._db.putconn(conn)
+
+    def list_blocklist(self, platform: str = "ebay") -> list[ScammerEntry]:
+        conn = self._db.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT platform, platform_seller_id, username, reason, source, id, created_at
+                    FROM scammer_blocklist
+                    WHERE platform = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (platform,),
+                )
+                return [
+                    ScammerEntry(
+                        platform=r[0], platform_seller_id=r[1], username=r[2],
+                        reason=r[3], source=r[4], id=r[5], created_at=str(r[6]),
+                    )
+                    for r in cur.fetchall()
+                ]
         finally:
             self._db.putconn(conn)

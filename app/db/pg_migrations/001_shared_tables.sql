@@ -36,3 +36,14 @@ CREATE TABLE IF NOT EXISTS reported_sellers (
     UNIQUE (platform, platform_seller_id)
 );
 
+CREATE TABLE IF NOT EXISTS scammer_blocklist (
+    id                  BIGSERIAL PRIMARY KEY,
+    platform            TEXT NOT NULL,
+    platform_seller_id  TEXT NOT NULL,
+    username            TEXT NOT NULL,
+    reason              TEXT,
+    source              TEXT NOT NULL DEFAULT 'manual',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (platform, platform_seller_id)
+);
+

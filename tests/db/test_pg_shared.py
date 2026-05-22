@@ -106,3 +106,52 @@ def test_clone_returns_self(postgres_dsn):
     store = SnipeSharedStore(db)
     assert store.clone() is store
     db.close()
+
+
+@pytest.mark.postgres
+def test_blocklist_add_get_remove(postgres_dsn):
+    from app.db.models import ScammerEntry
+    db = SnipeSharedDB(postgres_dsn)
+    db.run_migrations()
+    store = SnipeSharedStore(db)
+
+    assert not store.is_blocklisted("ebay", "bad-999")
+
+    entry = store.add_to_blocklist(ScammerEntry(
+        platform="ebay", platform_seller_id="bad-999",
+        username="scammer1", reason="sold fakes", source="manual",
+    ))
+    assert entry.id is not None
+    assert store.is_blocklisted("ebay", "bad-999")
+
+    entries = store.list_blocklist("ebay")
+    assert any(e.platform_seller_id == "bad-999" for e in entries)
+
+    store.remove_from_blocklist("ebay", "bad-999")
+    assert not store.is_blocklisted("ebay", "bad-999")
+    db.close()
+
+
+@pytest.mark.postgres
+def test_blocklist_upsert_is_idempotent(postgres_dsn):
+    from app.db.models import ScammerEntry
+    db = SnipeSharedDB(postgres_dsn)
+    db.run_migrations()
+    store = SnipeSharedStore(db)
+
+    store.add_to_blocklist(ScammerEntry(
+        platform="ebay", platform_seller_id="dup-test",
+        username="seller", reason="reason1", source="manual",
+    ))
+    # Second add — should not raise, should update username but preserve reason via COALESCE
+    store.add_to_blocklist(ScammerEntry(
+        platform="ebay", platform_seller_id="dup-test",
+        username="seller_updated", reason=None, source="community",
+    ))
+    entries = [e for e in store.list_blocklist("ebay") if e.platform_seller_id == "dup-test"]
+    assert len(entries) == 1
+    assert entries[0].username == "seller_updated"
+    assert entries[0].reason == "reason1"  # COALESCE preserved original reason
+
+    store.remove_from_blocklist("ebay", "dup-test")
+    db.close()
