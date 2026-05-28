@@ -174,6 +174,8 @@ Snipe uses a dual license:
 | Discovery pipeline — scrapers, platform adapters, search, keyword filtering | [MIT](LICENSE-MIT) |
 | LLM trust-scoring, query builder, vision assessment, AI features | [BSL 1.1](LICENSE-BSL) — free for personal non-commercial self-hosting; commercial use requires a paid license; converts to MIT after 4 years |
 
+Humans own design, architecture, code review, testing, and verification. LLMs are part of our development workflow. [Our positions on LLM use →](https://circuitforge.tech/positions)
+
 Privacy · Safety · Accessibility — co-equal, non-negotiable.
 
 [circuitforge.tech](https://circuitforge.tech)
