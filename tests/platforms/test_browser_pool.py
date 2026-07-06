@@ -8,7 +8,6 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -55,11 +54,11 @@ def _make_fake_slot():
 
 class TestGetPoolSingleton:
     def test_returns_same_instance(self):
-        from app.platforms.ebay.browser_pool import get_pool, BrowserPool
+        from app.platforms.ebay.browser_pool import get_pool
         assert get_pool() is get_pool()
 
     def test_returns_browser_pool_instance(self):
-        from app.platforms.ebay.browser_pool import get_pool, BrowserPool
+        from app.platforms.ebay.browser_pool import BrowserPool, get_pool
         assert isinstance(get_pool(), BrowserPool)
 
     def test_default_size_is_two(self):
@@ -122,8 +121,8 @@ class TestLifecycle:
 
 class TestFetchHtmlSlotHit:
     def test_uses_existing_slot_and_replenishes(self):
-        from app.platforms.ebay.browser_pool import BrowserPool
         import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
         slot = _make_fake_slot()
@@ -147,8 +146,8 @@ class TestFetchHtmlSlotHit:
         mock_register.assert_called_once_with(fresh_slot)
 
     def test_delay_is_respected(self):
-        from app.platforms.ebay.browser_pool import BrowserPool
         import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
         _mod._thread_local.slot = _make_fake_slot()
@@ -188,8 +187,8 @@ class TestFetchHtmlFallback:
         )
 
     def test_falls_back_when_pooled_fetch_raises(self):
-        from app.platforms.ebay.browser_pool import BrowserPool
         import app.platforms.ebay.browser_pool as _mod
+        from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
         slot = _make_fake_slot()
@@ -281,7 +280,6 @@ class TestThreadLocalSlotManagement:
         pool._playwright_available = True
 
         slots_seen: list = []
-        errors: list = []
 
         def worker():
             new_slot = _make_fake_slot()
@@ -291,8 +289,10 @@ class TestThreadLocalSlotManagement:
 
         t1 = threading.Thread(target=worker)
         t2 = threading.Thread(target=worker)
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
 
         assert len(slots_seen) == 2
         # Each thread got its own slot object (they may differ or coincidentally share
@@ -318,6 +318,7 @@ class TestImportErrorHandling:
 
     def test_start_logs_warning_when_playwright_missing(self, caplog):
         import logging
+
         from app.platforms.ebay.browser_pool import BrowserPool
 
         pool = BrowserPool(size=1)
@@ -344,7 +345,7 @@ class TestImportErrorHandling:
 
 class TestReplenishSlot:
     def test_replenish_closes_old_context_and_opens_new(self):
-        from app.platforms.ebay.browser_pool import _replenish_slot, _PooledBrowser
+        from app.platforms.ebay.browser_pool import _PooledBrowser, _replenish_slot
 
         old_ctx = MagicMock()
         new_ctx = MagicMock()
@@ -417,9 +418,9 @@ class TestCloseSlot:
 
 class TestScraperUsesPool:
     def test_fetch_url_delegates_to_pool(self):
+        from app.db.store import Store
         from app.platforms.ebay.browser_pool import BrowserPool
         from app.platforms.ebay.scraper import ScrapedEbayAdapter
-        from app.db.store import Store
 
         store = MagicMock(spec=Store)
         adapter = ScrapedEbayAdapter(store, delay=0)
@@ -438,8 +439,8 @@ class TestScraperUsesPool:
         )
 
     def test_fetch_url_uses_cache_before_pool(self):
-        from app.platforms.ebay.scraper import ScrapedEbayAdapter, _html_cache, _HTML_CACHE_TTL
         from app.db.store import Store
+        from app.platforms.ebay.scraper import _HTML_CACHE_TTL, ScrapedEbayAdapter, _html_cache
 
         store = MagicMock(spec=Store)
         adapter = ScrapedEbayAdapter(store, delay=0)

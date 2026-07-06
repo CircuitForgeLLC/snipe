@@ -11,9 +11,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import requests
+
+if TYPE_CHECKING:
+    from app.platforms.ebay.auth import EbayTokenManager
 
 log = logging.getLogger(__name__)
 
