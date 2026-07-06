@@ -1,12 +1,19 @@
 """Tests for snipe background task runner."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+_cforch_available = importlib.util.find_spec("circuitforge_orch") is not None
+requires_cforch = pytest.mark.skipif(
+    not _cforch_available,
+    reason="circuitforge_orch not installed",
+)
 
 from app.tasks.runner import (
     LLM_TASK_TYPES,
@@ -172,6 +179,7 @@ def _make_orch_client_mock(vision_json: str) -> MagicMock:
     return client
 
 
+@requires_cforch
 def test_run_task_photo_analysis_orch_success(tmp_db: Path):
     """Cloud path: CFOrchClient.task_allocate is used when GPU_SERVER_URL is set."""
     task_id, _ = insert_task(tmp_db, "trust_photo_analysis", job_id=1, params=_PARAMS)
@@ -207,6 +215,7 @@ def test_run_task_photo_analysis_orch_success(tmp_db: Path):
     assert parsed["authenticity_signal"] == "genuine_product_photo"
 
 
+@requires_cforch
 def test_run_task_photo_analysis_orch_uses_image_assessment_task(tmp_db: Path):
     """task_allocate must be called with product='snipe', task='image_assessment'."""
     task_id, _ = insert_task(tmp_db, "trust_photo_analysis", job_id=1, params=_PARAMS)
@@ -232,6 +241,7 @@ def test_run_task_photo_analysis_orch_uses_image_assessment_task(tmp_db: Path):
     client_instance.task_allocate.assert_called_once_with("snipe", "image_assessment")
 
 
+@requires_cforch
 def test_run_task_photo_analysis_orch_sends_image_url_content(tmp_db: Path):
     """Vision payload must include image_url content block with data URI."""
     task_id, _ = insert_task(tmp_db, "trust_photo_analysis", job_id=1, params=_PARAMS)
@@ -268,6 +278,7 @@ def test_run_task_photo_analysis_orch_sends_image_url_content(tmp_db: Path):
     assert url.startswith("data:image/jpeg;base64,"), f"Unexpected image URL format: {url[:40]}"
 
 
+@requires_cforch
 def test_run_task_photo_analysis_orch_task_not_found_falls_back(tmp_db: Path):
     """TaskNotFound from cf-orch → graceful fallback to local LLMRouter."""
     from circuitforge_orch.client import TaskNotFound
