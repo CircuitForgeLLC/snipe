@@ -1,6 +1,12 @@
 """Snipe FastAPI — search endpoint wired to ScrapedEbayAdapter + TrustScorer."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from circuitforge_core.community.snipe_store import SnipeCommunityStore
+    from circuitforge_core.platforms.ebay.oauth import EbayUserTokenManager, EbayUserTokens
+
 import asyncio
 import csv
 import dataclasses
@@ -136,10 +142,10 @@ def _evict_expired_cache() -> None:
 # ── Community DB (optional — only active when COMMUNITY_DB_URL is set) ────────
 # Holds SnipeCommunityStore at module level so endpoints can publish signals
 # without constructing a new connection pool on every request.
-_community_store: "SnipeCommunityStore | None" = None
+_community_store: SnipeCommunityStore | None = None
 
 
-def _get_community_store() -> "SnipeCommunityStore | None":
+def _get_community_store() -> SnipeCommunityStore | None:
     return _community_store
 
 
@@ -172,6 +178,7 @@ async def _lifespan(app: FastAPI):
     # pay the full cold-start cost (5-10s Xvfb + browser launch).
     # Pool size is controlled via BROWSER_POOL_SIZE env var (default: 2).
     import threading as _threading
+
     from app.platforms.ebay.browser_pool import get_pool as _get_browser_pool
     _browser_pool = _get_browser_pool()
     _pool_thread = _threading.Thread(
@@ -197,7 +204,8 @@ async def _lifespan(app: FastAPI):
     snipe_shared_dsn = os.environ.get("SNIPE_SHARED_DB_URL", "")
     if snipe_shared_dsn:
         try:
-            from app.db.pg_shared import SnipeSharedDB, SnipeSharedStore as _SnipeSharedStore
+            from app.db.pg_shared import SnipeSharedDB
+            from app.db.pg_shared import SnipeSharedStore as _SnipeSharedStore
             _pg_db = SnipeSharedDB(snipe_shared_dsn)
             _pg_db.run_migrations()
             _pg_shared_store = _SnipeSharedStore(_pg_db)
@@ -225,10 +233,13 @@ async def _lifespan(app: FastAPI):
     # LLM Query Builder — category cache + translator (best-effort, never blocks startup)
     global _category_cache, _query_translator
     try:
-        from app.platforms.ebay.categories import EbayCategoryCache
-        from app.llm.query_translator import QueryTranslator
-        from circuitforge_core.db import get_connection, run_migrations as _run_migrations
         from pathlib import Path as _Path
+
+        from circuitforge_core.db import get_connection
+        from circuitforge_core.db import run_migrations as _run_migrations
+
+        from app.llm.query_translator import QueryTranslator
+        from app.platforms.ebay.categories import EbayCategoryCache
 
         _cat_conn = get_connection(sched_db)  # use the same DB as the app
         _run_migrations(_cat_conn, _Path("app/db/migrations"))
@@ -263,6 +274,7 @@ async def _lifespan(app: FastAPI):
 
     async def _monitor_loop(db: Path) -> None:
         import asyncio as _asyncio
+
         from app.tasks.monitor import run_monitor_search
 
         while True:
@@ -415,7 +427,8 @@ def _get_shared_db():
     Used by make_corrections_router.
     """
     import sqlite3
-    from api.cloud_session import CLOUD_MODE, _LOCAL_SNIPE_DB, _shared_db_path
+
+    from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
     db_path = _shared_db_path() if CLOUD_MODE else _LOCAL_SNIPE_DB
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -1504,8 +1517,6 @@ def enrich_seller(
 
     shared_store = _make_shared_store(session.shared_db)
     user_store = Store(session.user_db)
-    shared_db = session.shared_db
-
     seller_obj = shared_store.get_seller("ebay", seller)
     if not seller_obj:
         raise HTTPException(status_code=404, detail=f"Seller '{seller}' not found")
@@ -1714,7 +1725,7 @@ def update_monitor_settings(
     session: CloudUser = Depends(get_session),
 ):
     from api.cloud_session import _LOCAL_SNIPE_DB, CLOUD_MODE, _shared_db_path
-    from app.tiers import can_use, get_limit
+    from app.tiers import get_limit
 
     features = compute_features(session.tier)
     if not features.background_monitoring:
@@ -2045,8 +2056,9 @@ async def build_search_query(
             detail="No LLM backend configured. Set CF_ORCH_URL (cloud) or OLLAMA_HOST / ANTHROPIC_API_KEY / OPENAI_API_KEY (local).",
         )
 
-    from app.llm.query_translator import QueryTranslatorError
     import asyncio
+
+    from app.llm.query_translator import QueryTranslatorError
 
     loop = asyncio.get_event_loop()
     try:
@@ -2086,7 +2098,7 @@ async def build_search_query(
 #
 # Flow: /api/ebay/connect → eBay → /api/ebay/callback → stored tokens → instant enrichment
 
-def _ebay_oauth_manager() -> "EbayUserTokenManager | None":
+def _ebay_oauth_manager() -> EbayUserTokenManager | None:
     """Return a configured EbayUserTokenManager, or None if EBAY_RUNAME not set."""
     from circuitforge_core.platforms.ebay.oauth import EbayUserTokenManager
     runame = os.environ.get("EBAY_RUNAME", "").strip()
@@ -2121,7 +2133,7 @@ def _get_ebay_tokens(user_db: Path) -> "dict | None":
     return None
 
 
-def _save_ebay_tokens(user_db: Path, tokens: "EbayUserTokens") -> None:
+def _save_ebay_tokens(user_db: Path, tokens: EbayUserTokens) -> None:
     """Persist eBay tokens into the per-user DB (single-row table — delete + insert)."""
     import sqlite3
     scopes_str = " ".join(tokens.scopes) if isinstance(tokens.scopes, list) else (tokens.scopes or "")
@@ -2144,8 +2156,9 @@ def ebay_oauth_connect(session: CloudUser = Depends(get_session)):
     Requires Paid tier or local mode. Returns a redirect URL for the frontend
     to navigate to (frontend opens in same tab or popup).
     """
-    from fastapi.responses import JSONResponse
     import secrets
+
+    from fastapi.responses import JSONResponse
 
     features = compute_features(session.tier)
     if not features.photo_analysis and session.tier != "local":
