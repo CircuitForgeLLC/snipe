@@ -6,10 +6,9 @@ from pathlib import Path
 
 from circuitforge_core.tasks.scheduler import (
     TaskScheduler,  # re-export for tests
-)
+    )
 from circuitforge_core.tasks.scheduler import (
     get_scheduler as _base_get_scheduler,
-    reset_scheduler,  # re-export for lifespan teardown
 )
 
 from app.tasks.runner import LLM_TASK_TYPES, VRAM_BUDGETS, run_task

@@ -3,10 +3,14 @@
 Run inside the container:
     docker exec -it snipe-api-1 python /app/snipe/scripts/debug_fetch_fresh.py
 """
-import sys, time, threading
+import sys
+import threading
+import time
+
 sys.path.insert(0, '/app/snipe')
 
 from bs4 import BeautifulSoup
+
 from app.platforms.ebay.browser_pool import BrowserPool, _close_slot
 
 URL = "https://www.mercari.com/search/?keyword=rtx+4090&sortBy=SORT_SCORE&priceMax=800"
@@ -34,6 +38,7 @@ print(f"Pool size after warmup: {pool2._q.qsize()}", flush=True)
 
 # Grab a slot and close it (simulating the thread-error path)
 import queue
+
 try:
     slot = pool2._q.get(timeout=3.0)
     print(f"Got slot on display :{slot.display_num}", flush=True)

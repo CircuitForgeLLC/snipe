@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
 from app.db.models import MarketComp, ScammerEntry, Seller
@@ -262,8 +261,9 @@ class SnipeSharedStore:
         listing_store must be provided (it's always the per-user SQLite Store).
         Returns count of sellers updated.
         """
-        from app.platforms.ebay.scraper import _classify_category_label  # lazy to avoid circular
         import json
+
+        from app.platforms.ebay.scraper import _classify_category_label  # lazy to avoid circular
 
         if not seller_ids or listing_store is None:
             return 0

@@ -9,12 +9,10 @@ Verifies:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -109,8 +107,8 @@ def test_async_search_empty_query(client):
     assert data["status"] == "queued"
     assert "session_id" in data
 
+
     from api.main import _update_queues
-    import queue as _queue
     sid = data["session_id"]
     assert sid in _update_queues
     q = _update_queues[sid]

@@ -12,13 +12,10 @@ Covers:
 from __future__ import annotations
 
 import os
-import queue as _queue
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,8 +38,9 @@ def isolated_cache():
 def client(tmp_path):
     """TestClient backed by a fresh tmp DB."""
     os.environ["SNIPE_DB"] = str(tmp_path / "snipe.db")
-    from api.main import app
     from fastapi.testclient import TestClient
+
+    from api.main import app
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -238,6 +236,7 @@ def test_evict_is_rate_limited():
 def test_async_cache_hit_skips_scraper(client, tmp_path):
     """On a warm cache hit the scraper adapter must not be called."""
     import threading
+
     import api.main as _main
     from api.main import _cache_key
 
@@ -292,6 +291,7 @@ def test_async_cache_hit_skips_scraper(client, tmp_path):
 def test_async_cache_miss_stores_result(client, tmp_path):
     """After a cache miss the result must be stored in _search_result_cache."""
     import threading
+
     import api.main as _main
     from api.main import _cache_key
 
@@ -353,6 +353,7 @@ def test_async_cache_miss_stores_result(client, tmp_path):
 def test_async_refresh_bypasses_cache_read(client, tmp_path):
     """refresh=True must bypass cache read and invoke the scraper."""
     import threading
+
     import api.main as _main
     from api.main import _cache_key
 

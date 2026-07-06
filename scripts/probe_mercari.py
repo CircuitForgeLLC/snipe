@@ -8,7 +8,6 @@ from __future__ import annotations
 import itertools
 import os
 import subprocess
-import sys
 import time
 
 _display_counter = itertools.count(200)

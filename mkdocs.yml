@@ -16,7 +16,7 @@ theme:
         name: Switch to dark mode
     - scheme: slate
       primary: deep orange
-      accent: orange
+      accent: amber
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -61,6 +61,9 @@ nav:
     - Trust Score Algorithm: reference/trust-scoring.md
     - Tier System: reference/tier-system.md
     - Architecture: reference/architecture.md
+
+extra_css:
+  - stylesheets/theme.css
 
 extra_javascript:
   - plausible.js

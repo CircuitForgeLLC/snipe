@@ -17,10 +17,11 @@ def test_store_clone_returns_new_instance(tmp_path):
 
 
 def test_ebay_adapter_accepts_protocol():
-    from app.platforms.ebay.adapter import EbayAdapter
-    import tempfile
     import pathlib
+    import tempfile
     from unittest.mock import MagicMock
+
+    from app.platforms.ebay.adapter import EbayAdapter
 
     with tempfile.TemporaryDirectory() as tmp:
         s = Store(pathlib.Path(tmp) / "t.db")
@@ -29,9 +30,10 @@ def test_ebay_adapter_accepts_protocol():
 
 
 def test_scraped_adapter_no_db_path_ref():
-    from app.platforms.ebay.scraper import ScrapedEbayAdapter
-    import tempfile
     import pathlib
+    import tempfile
+
+    from app.platforms.ebay.scraper import ScrapedEbayAdapter
 
     with tempfile.TemporaryDirectory() as tmp:
         s = Store(pathlib.Path(tmp) / "t.db")

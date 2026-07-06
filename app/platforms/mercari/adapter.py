@@ -23,7 +23,7 @@ import logging
 import time
 from typing import Optional
 
-from app.db.models import Listing, MarketComp, Seller
+from app.db.models import Listing, Seller
 from app.db.store import Store
 from app.platforms import PlatformAdapter, SearchFilters
 from app.platforms.mercari.scraper import (

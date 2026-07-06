@@ -1,5 +1,6 @@
 """Tests for SnipeSharedStore — requires live Postgres via SNIPE_SHARED_DB_URL."""
 import pytest
+
 from app.db.models import MarketComp, Seller
 from app.db.pg_shared import SnipeSharedDB, SnipeSharedStore
 from app.db.protocol import SharedTableProtocol

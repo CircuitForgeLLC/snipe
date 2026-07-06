@@ -1,7 +1,6 @@
 """Tests for PATCH /api/preferences display.currency validation."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,8 +20,9 @@ def client(tmp_path):
     """
     db_path = tmp_path / "snipe.db"
     # Ensure the DB is initialised so the Store can create its tables.
-    import api.cloud_session as _cs
     from circuitforge_core.db import get_connection, run_migrations
+
+    import api.cloud_session as _cs
     conn = get_connection(db_path)
     run_migrations(conn, Path("app/db/migrations"))
     conn.close()

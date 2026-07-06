@@ -7,8 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.llm.query_translator import QueryTranslator, QueryTranslatorError, SearchParamsResponse, _parse_response
-
+from app.llm.query_translator import (
+    QueryTranslator,
+    QueryTranslatorError,
+    _parse_response,
+)
 
 # ── _parse_response ───────────────────────────────────────────────────────────
 
@@ -75,8 +78,9 @@ def test_parse_response_missing_required_field():
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-from app.platforms.ebay.categories import EbayCategoryCache
 from circuitforge_core.db import get_connection, run_migrations
+
+from app.platforms.ebay.categories import EbayCategoryCache
 
 
 @pytest.fixture
