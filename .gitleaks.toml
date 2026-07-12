@@ -1,0 +1,8 @@
+[extend]
+path = "/Library/Development/CircuitForge/circuitforge-hooks/gitleaks.toml"
+
+[allowlist]
+description = "snipe: SettingsView.vue contains a placeholder eBay Partner Network campaign ID (5339149249) in a <input placeholder> — not a real credential"
+paths = [
+  '''web/src/views/SettingsView\.vue''',
+]
