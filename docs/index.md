@@ -2,7 +2,8 @@
 
 **eBay trust scoring before you bid.**
 
-![Snipe landing hero](screenshots/01-hero.png)
+![Snipe landing hero](screenshots/01-hero.png){ .only-light }
+![Snipe landing hero](screenshots/01-hero-dark.png){ .only-dark }
 
 Snipe scores eBay listings and sellers for trustworthiness before you place a bid. Paste a search query, get results with trust scores, and know exactly which listings are worth your time.
 
@@ -16,7 +17,8 @@ Snipe scores eBay listings and sellers for trustworthiness before you place a bi
 
 ## How it works
 
-![Search results with trust scores](screenshots/02-results.png)
+![Search results with trust scores](screenshots/02-results.png){ .only-light }
+![Search results with trust scores](screenshots/02-results-dark.png){ .only-dark }
 
 Each listing gets a composite trust score from 0–100 based on five seller signals: account age, feedback count, feedback ratio, price vs. market, and category history. Red flags are surfaced alongside the score, not buried in it.
 
