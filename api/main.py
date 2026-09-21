@@ -641,7 +641,9 @@ def _enqueue_vision_tasks(
             sched_db, "trust_photo_analysis", job_id=listing.id, params=params
         )
         if is_new:
-            ok = sched.enqueue(task_id, "trust_photo_analysis", listing.id, params)
+            ok = sched.enqueue(
+                task_id, "trust_photo_analysis", listing.id, params, sched_db
+            )
             if not ok:
                 log.warning(
                     "Vision task queue full — dropped task for listing %s",
